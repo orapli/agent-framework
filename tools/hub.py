@@ -159,6 +159,10 @@ def sweep_expired_leases(data, agent_id):
             _return_to_todo(data, agent_id, tid, t, "lease-expired")
 
 
+def _task_branch(tid):
+    return f"task-{tid.removeprefix('task_')}"
+
+
 def _cleanup_worktree(tid):
     """Remove worktrees/task-{id} left behind by a killed/expired/rejected
     claim. Without this, a later claimant's `git -C product-repo worktree add
@@ -167,7 +171,7 @@ def _cleanup_worktree(tid):
     product-repo/.git/worktrees/) and fails outright. Best-effort: any
     failure (no product-repo, nothing registered, git unavailable) is
     silently ignored -- this is housekeeping, not a correctness gate."""
-    branch = f"task-{tid.removeprefix('task_')}"
+    branch = _task_branch(tid)
     path = os.path.join(WORKTREES, branch)
     if not os.path.isdir(PRODUCT) or not os.path.exists(path):
         return
@@ -175,9 +179,48 @@ def _cleanup_worktree(tid):
                    capture_output=True)
 
 
+def _reclaim_stale_branch(tid):
+    """After _cleanup_worktree, the local branch task-{id} itself can still
+    block a retry: `git worktree add ... -b task-{id}` refuses to reuse a
+    branch name that already exists, regardless of whether its worktree was
+    removed (confirmed: this is a real residual collision, not theoretical).
+
+    Decide what to do with the leftover branch:
+      - doesn't exist: nothing to do.
+      - every commit on it is already present on origin/task-{id} (fetched
+        fresh): the work is safe on the remote, so delete the local ref
+        outright (`git branch -D`) -- a later claim starts clean and nothing
+        is lost, it's recoverable from origin if ever needed.
+      - otherwise (never pushed, or has local commits origin doesn't have):
+        NEVER destroy it silently -- a killed developer's uncommitted-to-
+        origin work would vanish with no recovery path. Rename it to
+        abandoned/task-{id}-<unix-ts> instead, freeing the original name for
+        reuse while preserving the commits for manual recovery.
+
+    Best-effort: any git failure is silently ignored -- this is
+    housekeeping, not a correctness gate."""
+    if not os.path.isdir(PRODUCT):
+        return
+    branch = _task_branch(tid)
+    exists = subprocess.run(["git", "-C", PRODUCT, "rev-parse", "--verify", "--quiet", branch],
+                            capture_output=True)
+    if exists.returncode != 0:
+        return
+    subprocess.run(["git", "-C", PRODUCT, "fetch", "origin", branch], capture_output=True)
+    safe = subprocess.run(["git", "-C", PRODUCT, "merge-base", "--is-ancestor",
+                           branch, f"origin/{branch}"], capture_output=True)
+    if safe.returncode == 0:
+        subprocess.run(["git", "-C", PRODUCT, "branch", "-D", branch], capture_output=True)
+    else:
+        stamp = int(now().timestamp())
+        subprocess.run(["git", "-C", PRODUCT, "branch", "-m", branch,
+                        f"abandoned/{branch}-{stamp}"], capture_output=True)
+
+
 def _return_to_todo(data, agent_id, tid, t, reason):
     """attempts += 1; land in todo, or blocked once max_attempts is hit."""
     _cleanup_worktree(tid)
+    _reclaim_stale_branch(tid)
     t["attempts"] = t.get("attempts", 0) + 1
     t["assignee"] = None
     t["lease_expires_at"] = None
@@ -369,6 +412,7 @@ def cmd_release_task(args):
             print(f"task {args.task} is not in_progress", file=sys.stderr)
             return 1
         _cleanup_worktree(args.task)
+        _reclaim_stale_branch(args.task)
         t["status"] = "todo"
         t["assignee"] = None
         t["lease_expires_at"] = None

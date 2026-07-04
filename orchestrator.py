@@ -138,7 +138,7 @@ def acquire_singleton():
             os.kill(pid, 0)  # raises if dead
             sys.exit(f"another orchestrator is running (pid {pid}); refusing to start")
         except (ValueError, ProcessLookupError, PermissionError):
-            log(f"removing stale orchestrator.lock")
+            log("removing stale orchestrator.lock")
             os.unlink(LOCK)
     fd = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     os.write(fd, str(os.getpid()).encode())

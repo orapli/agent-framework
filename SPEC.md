@@ -1,4 +1,4 @@
-# Multi-Agent Framework Specification v2.16
+# Multi-Agent Framework Specification v2.17
 
 Autonomous, parallel, cost-bounded optimization of a target GitHub repository by
 specialized AI personas, coordinated exclusively through file-based artifacts and
@@ -101,6 +101,12 @@ a lock-gated state register.
 | # | Change | Rationale |
 |---|--------|-----------|
 | 33 | New `execution_mode` value `hybrid`: Explorer / Architect Mode A (verdicts + task decomposition) / Developer / Documenter share one `single_session`-style process, but Architect Mode B (diff review) and QA ALWAYS spawn as separate fresh processes with their own models (`compute_hybrid_review_dispatch`, reusing `spawn()` exactly as `multi_process` does) | `single_session` amortizes spawn overhead well (SPEC §7.9, change 29) but has a structural self-review problem: the same context that authors a task's code can also be the one that approves it via Architect Mode B / QA, with only a prompt instruction ("QA review must still be genuine, not a rubber stamp") standing against confirmation bias — and the only archive-safety incident this framework has had (change 30) happened during a `single_session` run. `hybrid` keeps the session/cache savings for authorship-side roles while guaranteeing the reviewer is a fresh process that never saw the implementation happen |
+
+## Changelog from v2.16 (v2.17)
+
+| # | Change | Rationale |
+|---|--------|-----------|
+| 38 | Opt-in adaptive session pacing (`system_settings.session_token_budget`, unset by default): `_extract_rate_limit_info` captures the CLI's own `rate_limit_event` stream-json events (ground truth: `resetsAt`, `rateLimitType`) into `agent-hub/.rate-limit-info.json`; `compute_pace()` compares tokens spent since the current window's start against how far into the window `now` is, and `pacing_should_throttle()` holds off new dispatch (not crash-resumes) when spend is running >15% ahead of a smooth pace. Surfaced on the dashboard (§9) | Without this, `multi_process` bursts continuously until it hits the account's actual session-limit window and only reacts afterward (killing/`--resume`-ing in-flight work) — see §7's Session-limit awareness and change 29's rationale for `single_session`/`hybrid` existing in the first place. Spreading spend across the window in the first place, using the CLI's own authoritative rate-limit signal (available since change 34 switched all spawns to `stream-json`) rather than a token/hour heuristic, avoids hitting the wall at all |
 
 ## Changelog from v2.15 (v2.16)
 
@@ -455,6 +461,38 @@ Uniform exit-code semantics:
 - `system_settings.daily_token_budget` (config) is a hard ceiling enforced by
   the orchestrator (§7.4). The budget comparison always uses **tokens** (not USD).
 
+### Adaptive session pacing (opt-in, change 38)
+
+`daily_token_budget` is a hard ceiling; it says nothing about *when within
+the day* the budget gets spent. Left alone, `multi_process` bursts up to
+`max_concurrent_spawns` continuously until it hits the account's actual
+session-limit window (`rateLimitType: "five_hour"` in the CLI's own
+`rate_limit_event` stream-json events) and only then reacts — by which point
+work already in flight gets killed or forced into `--resume` (§7, Session-
+limit awareness).
+
+Set `system_settings.session_token_budget` (unset by default — the feature
+is a no-op until configured) to spread spawns across the window instead:
+
+- Every finished run's captured stream-json output is scanned for its last
+  `rate_limit_event`; the `rate_limit_info` (status, `resetsAt`,
+  `rateLimitType`) is persisted to `agent-hub/.rate-limit-info.json`
+  (gitignored) — ground truth from the CLI itself, not a heuristic.
+- `compute_pace()` derives `window_start = resetsAt - session_window_minutes
+  * 60` (default 300 = five hours, matching the observed `rateLimitType`)
+  and compares `spent_frac` (tokens billed since `window_start`, from
+  `runs.jsonl`) against `elapsed_frac` (how far into the window `now` is).
+  If `spent_frac` exceeds `elapsed_frac * 1.15` (15% tolerance — pacing
+  smooths bursts, it isn't meant to shave off the last few percent), new
+  dispatch is skipped for that poll cycle (`pacing_should_throttle`).
+- Crash-resumes (`--resume`, sunk cost already in flight) are NOT gated by
+  pacing — only new spawns are held back.
+- Before any `rate_limit_event` has been observed, or with
+  `session_token_budget` unset, `compute_pace()` returns `None` and pacing
+  is inert — existing `daily_token_budget`/cooldown behavior is unaffected.
+- Surfaced on the dashboard as `state.json`'s `pacing` key and a line under
+  the Token Budget gauge.
+
 ### Usage register shape
 
 Each slot in `usage.per_task` and `usage.per_day` is now an object:
@@ -507,6 +545,7 @@ Top-level keys of `state.json`:
 | `timelines` | `{task_id: [log entries with that task_id, chronological]}`, one key per entry in `tasks`. Rendered by `dashboard/index.html` as a per-task Gantt-style bar (time spent in each status) |
 | `insights` | All insight register entries |
 | `budget` | `{today_tokens, limit, per_day, top_per_task}` (token counts only) |
+| `pacing` | `{window_start, resets_at, elapsed_frac, spent_frac, budget, spent_tokens, throttle}` from `compute_pace()` (§9 Adaptive session pacing), or `null` when `session_token_budget` is unset or no `rate_limit_event` has been observed yet |
 | `costs` | `{per_persona: {<name>: {today_usd, cumulative_usd}}}` derived from `runs.jsonl` |
 | `effectiveness` | Funnel counts (proposed→accepted→tasks_generated→implemented→merged), cumulative_usd, usd_per_merged_task, rework_usd |
 | `log_tail` | Last 50 register log events |

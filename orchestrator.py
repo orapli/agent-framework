@@ -81,6 +81,7 @@ ISSUE_CACHE = os.path.join(HUB, "github-cache", "issues.json")
 CYCLE_STATUS = os.path.join(HUB, "cycle-status.md")
 HUB_PY = os.path.join(HERE, "tools", "hub.py")
 COOLDOWN_FILE = os.path.join(HUB, ".limit-cooldown")
+RATE_LIMIT_FILE = os.path.join(HUB, ".rate-limit-info.json")
 RESUMES_FILE = os.path.join(HUB, ".pending-resumes")
 RUNNING_REGISTRY = os.path.join(HUB, ".running-registry.json")
 INSIGHT_INDEX = os.path.join(HUB, "01_insights", "index.json")
@@ -790,6 +791,95 @@ def handle_limit_death(run, payload, cfg):
             f"cooldown until {when:%H:%M UTC}")
 
 
+# ── Adaptive session pacing ───────────────────────────────────────────────
+#
+# Without this, the orchestrator spawns as fast as max_concurrent_spawns
+# allows until it BURSTS through the account's session-limit window and
+# reactively cools down (handle_limit_death above) -- by which point work
+# already in flight is killed or forced into --resume. Spreading spawns
+# across the window instead avoids hitting the wall in the first place.
+# Opt-in: disabled unless system_settings.session_token_budget is set.
+
+def _extract_rate_limit_info(run):
+    """The CLI itself reports the account's real session-window state via a
+    `type: "rate_limit_event"` stream-json event (resetsAt, rateLimitType,
+    status) -- ground truth, not a heuristic. Returns the last such event's
+    `rate_limit_info` dict from this run's captured output, or None if the
+    run produced none (e.g. --dry-run, or a version of the CLI that doesn't
+    emit it)."""
+    for line in reversed(run.stdout_lines):
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if d.get("type") == "rate_limit_event":
+            return d.get("rate_limit_info")
+    return None
+
+
+def _save_rate_limit_info(info):
+    tmp = RATE_LIMIT_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({**info, "observed_at": time.time()}, f, indent=2)
+    os.replace(tmp, RATE_LIMIT_FILE)
+
+
+def _load_rate_limit_info():
+    return load_json(RATE_LIMIT_FILE)
+
+
+def compute_pace(cfg, rate_info, runs):
+    """Return {window_start, resets_at, elapsed_frac, spent_frac, budget,
+    throttle} describing whether we're spending this session window's token
+    budget faster than a smooth pace would use it up before reset, or None
+    if pacing can't be evaluated yet (no session_token_budget configured,
+    or no rate_limit_event observed yet -- the first few spawns of any run
+    always fall in this bucket).
+
+    `window_start` is derived from `resetsAt` and session_window_minutes
+    (rateLimitType is always "five_hour" in observed output; the window
+    length is configurable rather than hardcoded in case that ever
+    changes). Tokens spent are summed from runs.jsonl entries that started
+    at or after window_start -- exactly the entries billed against the
+    current window."""
+    budget = cfg["system_settings"].get("session_token_budget")
+    if not budget or not rate_info or not rate_info.get("resetsAt"):
+        return None
+    window_s = int(cfg["system_settings"].get("session_window_minutes", 300)) * 60
+    resets_at = float(rate_info["resetsAt"])
+    window_start = resets_at - window_s
+    t = time.time()
+    if t <= window_start or t >= resets_at:
+        return None  # stale/invalid observation -- don't act on it
+    elapsed_frac = (t - window_start) / window_s
+    spent = sum(_tokens(r.get("tokens", 0)) for r in runs
+                if (r.get("started_at") and
+                    datetime.datetime.strptime(r["started_at"], "%Y-%m-%dT%H:%M:%SZ")
+                        .replace(tzinfo=datetime.timezone.utc).timestamp() >= window_start))
+    spent_frac = spent / budget
+    # 15% tolerance: pacing smooths bursts, it isn't meant to shave off the
+    # last few percent -- a hard trigger on any lead at all would throttle
+    # constantly on perfectly normal variance between poll cycles.
+    throttle = spent_frac > elapsed_frac * 1.15
+    return {"window_start": window_start, "resets_at": resets_at,
+            "elapsed_frac": round(elapsed_frac, 4), "spent_frac": round(spent_frac, 4),
+            "budget": budget, "spent_tokens": spent, "throttle": throttle}
+
+
+def pacing_should_throttle(cfg):
+    info = _load_rate_limit_info()
+    if not info:
+        return False, None
+    pace = compute_pace(cfg, info, _read_runs())
+    if pace is None:
+        return False, None
+    if pace["throttle"]:
+        log(f"adaptive pacing: {pace['spent_frac']:.0%} of session budget spent at "
+            f"{pace['elapsed_frac']:.0%} of the window elapsed — not spawning new work "
+            f"this cycle")
+    return pace["throttle"], pace
+
+
 def spawn_resume(entry, cfg, dry_run):
     if dry_run:
         log(f"DRY-RUN would RESUME {entry['persona']} session {entry['session_id'][:8]}…")
@@ -1002,6 +1092,7 @@ def _write_dashboard_state(data, running, cfg):
                 "per_day": per_day,
                 "top_per_task": top_per_task,
             },
+            "pacing": compute_pace(cfg, _load_rate_limit_info(), runs),
             "costs": {"per_persona": costs_per_persona},
             "effectiveness": {
                 "funnel": {
@@ -1078,6 +1169,9 @@ def reap(running, lease_minutes, data=None, cfg=None):
         err = run.proc.stderr.read() if run.proc.stderr else ""
         payload = _final_result_payload(run)
         run.cost_label = resolve_developer_cost_label(run)
+        rate_info = _extract_rate_limit_info(run)
+        if rate_info:
+            _save_rate_limit_info(rate_info)
         if payload:
             tokens = tokens_from_result(payload)
             cost_usd = cost_usd_from_result(payload)
@@ -1332,7 +1426,15 @@ def main():
                 # redundant developer that immediately exited 3).
                 if resumed_any and not args.dry_run:
                     data = migrate(load_json(STATUS, {}))
-                if mode == "single_session":
+                # Adaptive pacing (opt-in via session_token_budget): resumes
+                # above still proceed regardless -- they're sunk cost already
+                # in flight, not a new burst -- but new dispatch holds off
+                # this cycle if we're spending faster than the window's
+                # reset time warrants.
+                throttled, _pace = pacing_should_throttle(cfg)
+                if throttled:
+                    pass
+                elif mode == "single_session":
                     # One process, one fixed model, all roles — see
                     # SPEC §7.9. Never more than one at a time: it already
                     # covers the whole backlog per invocation, so a second

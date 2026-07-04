@@ -240,6 +240,43 @@ order = o._prioritize_proposed_insights(insights_mixed)
 assert order == ["insight_mmm_github", "insight_aaa_selfgen", "insight_zzz_selfgen"], \
     f"github-sourced insight must come first despite losing alphabetically, got {order}"
 
+# adaptive session pacing (compute_pace) -- opt-in, ground-truthed against
+# the CLI's own rate_limit_event rather than a heuristic
+import time as _time
+_now = _time.time()
+_window_s = 300 * 60
+_resets_at = _now + _window_s * 0.5  # halfway through a 5h window
+_cfg_on = {"system_settings": {"session_token_budget": 1000000, "session_window_minutes": 300}}
+_rate_info = {"resetsAt": _resets_at, "status": "allowed", "rateLimitType": "five_hour"}
+def _ts(offset_s):
+    import datetime
+    return datetime.datetime.fromtimestamp(_now + offset_s, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+balanced = o.compute_pace(_cfg_on, _rate_info, [{"started_at": _ts(-_window_s*0.4), "tokens": 500000}])
+assert balanced["throttle"] is False, "spending in proportion to elapsed window time must not throttle"
+
+ahead = o.compute_pace(_cfg_on, _rate_info, [{"started_at": _ts(-_window_s*0.4), "tokens": 950000}])
+assert ahead["throttle"] is True, "spending 95% of budget at 50% elapsed must throttle"
+
+assert o.compute_pace({"system_settings": {}}, _rate_info, [{"started_at": _ts(0), "tokens": 1}]) is None, \
+    "pacing must be a no-op (opt-in) when session_token_budget is unset"
+assert o.compute_pace(_cfg_on, None, []) is None, \
+    "pacing must be a no-op with no rate_limit_event observed yet"
+
+stale = o.compute_pace(_cfg_on, _rate_info, [{"started_at": _ts(-_window_s*2), "tokens": 999999}])
+assert stale["spent_tokens"] == 0, "tokens spent in a PRIOR window must not count toward this one"
+
+# _extract_rate_limit_info parses a real-shaped stream-json rate_limit_event
+class _FakeRun:
+    stdout_lines = [
+        '{"type":"system","subtype":"init"}',
+        '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1783174200,"rateLimitType":"five_hour"}}',
+        '{"type":"result","subtype":"success"}',
+    ]
+info = o._extract_rate_limit_info(_FakeRun())
+assert info == {"status": "allowed", "resetsAt": 1783174200, "rateLimitType": "five_hour"}, \
+    f"must extract the rate_limit_info dict from the last matching stream-json line, got {info}"
+
 print("orchestrator.py checks OK")
 PYEOF
 unset AGENT_HUB_DIR

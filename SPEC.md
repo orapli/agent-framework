@@ -1,4 +1,4 @@
-# Multi-Agent Framework Specification v2.11
+# Multi-Agent Framework Specification v2.12
 
 Autonomous, parallel, cost-bounded optimization of a target GitHub repository by
 specialized AI personas, coordinated exclusively through file-based artifacts and
@@ -96,7 +96,11 @@ a lock-gated state register.
 |---|--------|-----------|
 | 32 | `_branch_merged_into_main` (v2.9's archive-merge check) now also checks whether the branch tip's tree hash appears anywhere in `origin/main`'s commit history, in addition to the existing ancestor check | Real false-refusal found immediately after v2.9 shipped: GitHub's squash-merge (the `merge_method` used throughout this framework's own PR flow) creates a brand-new commit on `main` whose tree matches the branch tip but which is NOT a descendant of the branch's own commit — so `merge-base --is-ancestor` reports "not merged" for every squash-merged PR, including ones that genuinely landed. The tree-hash check catches exactly this case without weakening the "ambiguity → refuse" default from v2.9 |
 
+## Changelog from v2.11 (v2.12)
 
+| # | Change | Rationale |
+|---|--------|-----------|
+| 33 | New `execution_mode` value `hybrid`: Explorer / Architect Mode A (verdicts + task decomposition) / Developer / Documenter share one `single_session`-style process, but Architect Mode B (diff review) and QA ALWAYS spawn as separate fresh processes with their own models (`compute_hybrid_review_dispatch`, reusing `spawn()` exactly as `multi_process` does) | `single_session` amortizes spawn overhead well (SPEC §7.9, change 29) but has a structural self-review problem: the same context that authors a task's code can also be the one that approves it via Architect Mode B / QA, with only a prompt instruction ("QA review must still be genuine, not a rubber stamp") standing against confirmation bias — and the only archive-safety incident this framework has had (change 30) happened during a `single_session` run. `hybrid` keeps the session/cache savings for authorship-side roles while guaranteeing the reviewer is a fresh process that never saw the implementation happen |
 
 | # | Change | Rationale |
 |---|--------|-----------|
@@ -335,11 +339,11 @@ The single launching authority. A polling loop (default interval 60s) that:
 The orchestrator never mutates `status.json` itself; recovery and transitions
 belong to `hub.py` and the personas.
 
-### 7.9 Execution modes: `multi_process` vs `single_session`
+### 7.9 Execution modes: `multi_process`, `single_session`, `hybrid`
 
 `system_settings.execution_mode` (`"multi_process"` default, or
-`"single_session"`; overridable per-run with `--mode`) selects how the
-orchestrator turns pending work into spawned processes:
+`"single_session"`/`"hybrid"`; overridable per-run with `--mode`) selects how
+the orchestrator turns pending work into spawned processes:
 
 - **`multi_process`** (§7 as described above): one spawned process per
   persona-phase, each on its own model from `persona_model_mapping`. Best
@@ -360,11 +364,29 @@ orchestrator turns pending work into spawned processes:
   at a time — it already covers the whole backlog per invocation. Session-
   limit detection, cooldown, and `--resume` apply identically; a `Run`
   object works the same regardless of which mode produced it.
+- **`hybrid`**: Explorer, Architect Mode A (verdicts + decomposition only),
+  Developer, and Documenter share one `single_session`-style process
+  (`build_hybrid_session_prompt`/`build_hybrid_session_system_prompt`) — but
+  Architect Mode B (diff review) and QA are excluded from that queue and
+  ALWAYS spawn as separate, freshly-started processes on their own models
+  (`compute_hybrid_review_dispatch`, dispatched exactly like `multi_process`
+  does for those two roles). The hybrid session's own system prompt
+  explicitly instructs it never to touch `implemented`/`approved_by_architect`
+  tasks itself. This exists because `single_session` has a structural
+  self-review problem that a prompt instruction alone cannot fully close: the
+  same context that writes a task's code can also be the one that approves
+  it, and this framework's only archive-safety incident (§ change 30) did in
+  fact happen during a `single_session` run. `hybrid` keeps
+  `single_session`'s cache/session savings for the authorship-side roles
+  while guaranteeing the code is judged by a process that never saw it
+  written.
 
 Pick `single_session` when token/session budget is the binding constraint
-(the common case on a subscription plan with a 5-hour window) rather than
-latency or per-phase model specialization — it pays the fixed per-spawn
-overhead once per sweep instead of once per phase. Pick `multi_process` for
+(the common case on a subscription plan with a 5-hour window) and the
+self-review risk above is acceptable for the workspace. Pick `hybrid` for
+the same budget profile when that self-review risk is not acceptable — it
+costs two extra small, short-lived spawns (Mode B review, QA) per cycle in
+exchange for a genuinely independent reviewer. Pick `multi_process` for
 higher throughput and best per-phase cost/quality when budget is not the
 constraint. This is a standing, config-driven choice — not a one-off flag —
 so a workspace can default to whichever mode fits its actual constraints.

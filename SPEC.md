@@ -1,4 +1,4 @@
-# Multi-Agent Framework Specification v2.18
+# Multi-Agent Framework Specification v2.19
 
 Autonomous, parallel, cost-bounded optimization of a target GitHub repository by
 specialized AI personas, coordinated exclusively through file-based artifacts and
@@ -101,6 +101,12 @@ a lock-gated state register.
 | # | Change | Rationale |
 |---|--------|-----------|
 | 33 | New `execution_mode` value `hybrid`: Explorer / Architect Mode A (verdicts + task decomposition) / Developer / Documenter share one `single_session`-style process, but Architect Mode B (diff review) and QA ALWAYS spawn as separate fresh processes with their own models (`compute_hybrid_review_dispatch`, reusing `spawn()` exactly as `multi_process` does) | `single_session` amortizes spawn overhead well (SPEC §7.9, change 29) but has a structural self-review problem: the same context that authors a task's code can also be the one that approves it via Architect Mode B / QA, with only a prompt instruction ("QA review must still be genuine, not a rubber stamp") standing against confirmation bias — and the only archive-safety incident this framework has had (change 30) happened during a `single_session` run. `hybrid` keeps the session/cache savings for authorship-side roles while guaranteeing the reviewer is a fresh process that never saw the implementation happen |
+
+## Changelog from v2.18 (v2.19)
+
+| # | Change | Rationale |
+|---|--------|-----------|
+| 40 | Added `_drain_stderr`, a background thread mirroring `_drain_stdout` (change 34), started by `_start_reader` alongside it. `reap()` now joins both threads and reads `run.stderr_lines` instead of a one-shot `proc.stderr.read()` | Independent review found stderr was never drained during execution under either output format -- the old `communicate()`-based `reap()` only ever read it in one shot, after the process had already exited, same as it always had been. A child writing enough to stderr while still running (debug output, a warning storm) fills the OS pipe buffer (~64KB on Linux) and blocks on the next write. Reproduced directly: a test child writing 256KB to stderr with nothing draining it hung indefinitely; with `_drain_stderr` wired in via the same `_start_reader` spawns already use, the identical child exits cleanly with all lines captured |
 
 ## Changelog from v2.17 (v2.18)
 

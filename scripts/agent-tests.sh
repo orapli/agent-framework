@@ -297,6 +297,40 @@ assert o.build_single_session_prompt(empty_data, cfg3) is not None, \
 assert o.build_hybrid_session_prompt(empty_data, cfg3) is not None, \
     "hybrid session must still fall back to exploring when there is no acceptance history yet"
 
+# stderr must be drained continuously, same as stdout, or a chatty child
+# (debug output, a warning storm) blocks forever on a full OS pipe buffer
+# once nothing is reading it. Reproduces with a real subprocess -- this
+# actually hung indefinitely before _drain_stderr existed.
+import subprocess as _sp
+_child = r"""
+import sys
+for i in range(4096):
+    sys.stderr.write("x" * 64 + "\n")
+sys.stderr.flush()
+print("CHILD-DONE")
+"""
+_proc = _sp.Popen(["python3", "-c", _child], stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+
+class _StderrTestRun:
+    def __init__(self, proc):
+        self.proc, self.persona, self.agent_id, self.cost_label, self.model = proc, "t", "t-1", "c", "m"
+        self.started = _time.time()
+        self.stdout_lines, self.last_activity, self.reader_thread = [], None, None
+        self.stderr_lines, self.stderr_thread = [], None
+
+_run = _StderrTestRun(_proc)
+o._start_reader(_run)
+_deadline = _time.time() + 8
+while _time.time() < _deadline and _proc.poll() is None:
+    _time.sleep(0.2)
+if _proc.poll() is None:
+    _proc.kill()
+    raise AssertionError("child still alive after 8s -- stderr pipe deadlock regressed")
+_run.reader_thread.join(timeout=5)
+_run.stderr_thread.join(timeout=5)
+assert _run.stdout_lines == ["CHILD-DONE"], f"stdout capture broke, got {_run.stdout_lines}"
+assert len(_run.stderr_lines) == 4096, f"expected 4096 drained stderr lines, got {len(_run.stderr_lines)}"
+
 print("orchestrator.py checks OK")
 PYEOF
 unset AGENT_HUB_DIR

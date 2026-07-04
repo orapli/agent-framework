@@ -126,7 +126,8 @@ def migrate(data):
             elif isinstance(v, dict) and v.get("usd") is None:
                 v["usd"] = 0.0
     data.setdefault("agents", {})
-    data.setdefault("log", [])
+    for entry in data.setdefault("log", []):
+        entry.setdefault("task", None)
     return data
 
 
@@ -144,9 +145,16 @@ def save_status(data):
     os.replace(tmp, STATUS)
 
 
-def log_event(data, agent_id, action, detail):
+def log_event(data, agent_id, action, detail, task=None):
+    """`task`, when given, is the task_id this event concerns -- stored as
+    its own field, separate from `detail`. Several call sites pass a
+    human-written --note as `detail` (e.g. cmd_transition), which then
+    contains no reliable trace of which task the event was about; querying
+    a single task's history by scanning `detail` for its id therefore
+    silently misses most of that task's own log entries. `task` fixes that
+    without touching `detail`'s existing meaning."""
     data["log"].append(
-        {"ts": iso(now()), "agent": agent_id, "action": action, "detail": detail}
+        {"ts": iso(now()), "agent": agent_id, "action": action, "detail": detail, "task": task}
     )
 
 
@@ -232,10 +240,10 @@ def _return_to_todo(data, agent_id, tid, t, reason):
     if t["attempts"] >= max_attempts:
         t["status"] = "blocked"
         t["blocked_reason"] = "retry-limit"
-        log_event(data, agent_id, "->blocked", f"{tid}: retry-limit ({reason})")
+        log_event(data, agent_id, "->blocked", f"{tid}: retry-limit ({reason})", task=tid)
     else:
         t["status"] = "todo"
-        log_event(data, agent_id, "->todo", f"{tid}: {reason} (attempt {t['attempts']})")
+        log_event(data, agent_id, "->todo", f"{tid}: {reason} (attempt {t['attempts']})", task=tid)
 
 
 def cmd_add_insight(args):
@@ -339,7 +347,7 @@ def cmd_add_task(args):
         }
         if iid in data["insights"]:
             data["insights"][iid]["tasks_generated"] = True
-        log_event(data, args.agent_id, "add-task", tid)
+        log_event(data, args.agent_id, "add-task", tid, task=tid)
         save_status(data)
     print(tid)
     return 0
@@ -374,7 +382,7 @@ def cmd_claim_task(args):
             t["assignee"] = args.agent_id
             t["branch"] = f"task-{tid.removeprefix('task_')}"
             t["lease_expires_at"] = iso(now() + datetime.timedelta(minutes=lease_minutes))
-            log_event(data, args.agent_id, "claim", tid)
+            log_event(data, args.agent_id, "claim", tid, task=tid)
             save_status(data)
             print(json.dumps({"task_id": tid, "branch": t["branch"],
                               "worktree": f"worktrees/{t['branch']}",
@@ -394,7 +402,7 @@ def cmd_renew_lease(args):
             print(f"task {args.task} is not in_progress", file=sys.stderr)
             return 1
         t["lease_expires_at"] = iso(now() + datetime.timedelta(minutes=lease_minutes))
-        log_event(data, args.agent_id, "renew-lease", args.task)
+        log_event(data, args.agent_id, "renew-lease", args.task, task=args.task)
         save_status(data)
     print(t["lease_expires_at"])
     return 0
@@ -416,7 +424,7 @@ def cmd_release_task(args):
         t["status"] = "todo"
         t["assignee"] = None
         t["lease_expires_at"] = None
-        log_event(data, args.agent_id, "release", f"{args.task}: {args.note or 'released'}")
+        log_event(data, args.agent_id, "release", f"{args.task}: {args.note or 'released'}", task=args.task)
         save_status(data)
     print(f"{args.task}: todo (attempts unchanged: {t['attempts']})")
     return 0
@@ -438,11 +446,11 @@ def cmd_transition(args):
                 print("--note (rejection reason) is required for review_failed", file=sys.stderr)
                 return 1
             t.setdefault("review_notes", []).append(args.note)
-            log_event(data, args.agent_id, f"{cur}->review_failed", args.note)
+            log_event(data, args.agent_id, f"{cur}->review_failed", args.note, task=args.task)
             # Automatic cascade (SPEC §4): review_failed → todo, attempts += 1
             _return_to_todo(data, args.agent_id, args.task, t, "review-failed")
         elif args.to == "todo" and cur == "in_progress":
-            log_event(data, args.agent_id, "in_progress->todo", args.note or args.task)
+            log_event(data, args.agent_id, "in_progress->todo", args.note or args.task, task=args.task)
             _return_to_todo(data, args.agent_id, args.task, t, args.note or "returned")
         else:
             t["status"] = args.to
@@ -457,7 +465,7 @@ def cmd_transition(args):
                 t["attempts"] = 0
             if args.to in ("implemented", "pending_human_build"):
                 t["lease_expires_at"] = None
-            log_event(data, args.agent_id, f"{cur}->{args.to}", args.note or args.task)
+            log_event(data, args.agent_id, f"{cur}->{args.to}", args.note or args.task, task=args.task)
         save_status(data)
     print(f"{args.task}: {t['status']}")
     return 0
@@ -476,7 +484,7 @@ def cmd_record_cost(args):
         day_slot = usage["per_day"].setdefault(day, {"tokens": 0, "usd": 0.0})
         day_slot["tokens"] += n
         day_slot["usd"] += usd
-        log_event(data, args.agent_id, "record-cost", f"{args.task}: +{n} tokens, +{usd} usd")
+        log_event(data, args.agent_id, "record-cost", f"{args.task}: +{n} tokens, +{usd} usd", task=args.task)
         save_status(data)
     print(f"{args.task}: {slot['tokens']} tokens, {slot['usd']:.4f} usd "
           f"(today: {day_slot['tokens']} tokens, {day_slot['usd']:.4f} usd)")
@@ -577,7 +585,7 @@ def cmd_archive(args):
             f.write(f"{args.task} | {t.get('title','')} | {','.join(t.get('target_files',[]))} "
                     f"| {t['status']} | {entry['tokens']}\n")
         del data["tasks"][args.task]
-        log_event(data, args.agent_id, "archive", args.task)
+        log_event(data, args.agent_id, "archive", args.task, task=args.task)
         save_status(data)
     # Worktree + remote branch cleanup, best effort (outside the lock)
     branch = t.get("branch") or f"task-{args.task.removeprefix('task_')}"

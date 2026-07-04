@@ -172,6 +172,44 @@ h2 {
   border-radius: 8px;
   padding: 12px;
   overflow: hidden;
+  margin-bottom: 8px;
+}
+
+/* pipeline timeline */
+.timeline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.timeline-row {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.timeline-label {
+  font-size: 11px;
+  color: var(--subtext);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.timeline-bar {
+  display: flex;
+  height: 14px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--bg-surface0);
+}
+
+.timeline-seg {
+  height: 100%;
+  min-width: 2px;
 }
 
 /* kanban */
@@ -559,6 +597,7 @@ h2 {
     var pers   = state.personas       || {};
     var sess   = state.active_session || null;
     var tasks  = state.tasks          || {};
+    var tl     = state.timelines      || {};
     var ins    = state.insights       || {};
     var budget = state.budget         || {};
     var costs  = state.costs          || {};
@@ -575,6 +614,7 @@ h2 {
       build_header(orch, orch_ok),
       build_active_session(sess),
       build_personas(pers, costs),
+      build_timeline(tasks, tl),
       build_mid(tasks, ins, eff),
       build_bot(budget, costs, log),
     ].join('');
@@ -653,6 +693,51 @@ h2 {
   }
 
   /* ── middle row ── */
+  /* ── per-task pipeline timeline (Gantt-style) ── */
+  function build_timeline(tasks, timelines) {
+    var ids = Object.keys(tasks);
+    if (!ids.length) return '';
+    var now_ms = Date.now();
+
+    var rows = ids.map(function (id) {
+      var events = (timelines || {})[id] || [];
+      var segs = [];
+      var last_status = null, last_ts = null;
+      events.forEach(function (e) {
+        var status = null;
+        if (e.action === 'add-task') status = 'todo';
+        else if (e.action === 'claim') status = 'in_progress';
+        else if (e.action.indexOf('->') !== -1) status = e.action.split('->').pop();
+        if (!status) return; // renew-lease / record-cost don't change status -- no new segment
+        if (last_status !== null) {
+          segs.push({ status: last_status, from_ms: new Date(last_ts).getTime(), to_ms: new Date(e.ts).getTime() });
+        }
+        last_status = status;
+        last_ts = e.ts;
+      });
+      if (last_status !== null) {
+        segs.push({ status: last_status, from_ms: new Date(last_ts).getTime(), to_ms: now_ms });
+      }
+      if (!segs.length) return '';
+
+      var total = Math.max(1, now_ms - segs[0].from_ms);
+      var bar = segs.map(function (s) {
+        var pct = clamp(((s.to_ms - s.from_ms) / total) * 100, 0.5, 100);
+        var color = STATUS_COLOR[s.status] || C.muted;
+        return '<div class="timeline-seg" style="width:' + pct + '%;background:' + color + '" ' +
+          'title="' + esc(s.status) + ' — ' + fmt_elapsed((s.to_ms - s.from_ms) / 1000) + '"></div>';
+      }).join('');
+
+      return '<div class="timeline-row">' +
+        '<div class="timeline-label">' + esc(id) + '</div>' +
+        '<div class="timeline-bar">' + bar + '</div>' +
+        '</div>';
+    }).filter(Boolean).join('');
+
+    if (!rows) return '';
+    return '<div class="panel"><h2>Pipeline Timeline</h2><div class="timeline-list">' + rows + '</div></div>';
+  }
+
   function build_mid(tasks, insights, eff) {
     return '<div class="mid-row">' +
       build_kanban(tasks) +

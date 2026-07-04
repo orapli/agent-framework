@@ -63,6 +63,15 @@ fail() { echo "SMOKE FAIL: $1" >&2; exit 1; }
 "${HUB[@]}" transition --task task_001 --to implemented >/dev/null || fail "->implemented"
 "${HUB[@]}" transition --task task_001 --to review_failed --note n >/dev/null || fail "->review_failed"
 "${HUB[@]}" show --task task_001 | grep -q '"status": "todo"' || fail "review_failed must cascade to todo"
+# A --note transition's `detail` is the note text ("n"), not the task id --
+# the log entry's separate `task` field must still identify task_001, or a
+# per-task timeline built from `log` would silently miss this event.
+python3 - "$SC/status.json" <<'PYEOF' || fail "log_event task field for a --note transition"
+import json, sys
+d = json.load(open(sys.argv[1]))
+matches = [e for e in d["log"] if e.get("task") == "task_001" and e["action"] == "implemented->review_failed"]
+assert matches, "review_failed transition's log entry must carry task='task_001' even though detail is just the note text"
+PYEOF
 "${HUB[@]}" claim-task --persona developer >/dev/null || fail "reclaim"
 "${HUB[@]}" transition --task task_001 --to implemented >/dev/null || fail "->implemented(2)"
 "${HUB[@]}" transition --task task_001 --to approved_by_architect >/dev/null || fail "->approved"

@@ -931,6 +931,20 @@ def _write_dashboard_state(data, running, cfg):
 
         insights = data.get("insights", {})
         tasks = data.get("tasks", {})
+
+        # Per-task event history for the dashboard's pipeline timeline (only
+        # possible because log_event now stamps a `task` field on every
+        # task-scoped entry — before that, an event whose `detail` was a
+        # human --note, not the task id, was invisible to a per-task query).
+        log_entries = data.get("log", [])
+        timelines = {
+            tid: sorted(
+                (e for e in log_entries if e.get("task") == tid),
+                key=lambda e: e["ts"],
+            )
+            for tid in tasks
+        }
+
         n_proposed = sum(1 for i in insights.values() if i.get("status") == "proposed")
         n_accepted = sum(1 for i in insights.values() if i.get("status") == "accepted")
         n_tasks_generated = sum(1 for i in insights.values() if i.get("tasks_generated"))
@@ -967,6 +981,7 @@ def _write_dashboard_state(data, running, cfg):
             "personas": personas_state,
             "active_session": active_session,
             "tasks": tasks,
+            "timelines": timelines,
             "insights": insights,
             "budget": {
                 "today_tokens": today_tokens,

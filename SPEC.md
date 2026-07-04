@@ -1,4 +1,4 @@
-# Multi-Agent Framework Specification v2.14
+# Multi-Agent Framework Specification v2.15
 
 Autonomous, parallel, cost-bounded optimization of a target GitHub repository by
 specialized AI personas, coordinated exclusively through file-based artifacts and
@@ -101,6 +101,12 @@ a lock-gated state register.
 | # | Change | Rationale |
 |---|--------|-----------|
 | 33 | New `execution_mode` value `hybrid`: Explorer / Architect Mode A (verdicts + task decomposition) / Developer / Documenter share one `single_session`-style process, but Architect Mode B (diff review) and QA ALWAYS spawn as separate fresh processes with their own models (`compute_hybrid_review_dispatch`, reusing `spawn()` exactly as `multi_process` does) | `single_session` amortizes spawn overhead well (SPEC §7.9, change 29) but has a structural self-review problem: the same context that authors a task's code can also be the one that approves it via Architect Mode B / QA, with only a prompt instruction ("QA review must still be genuine, not a rubber stamp") standing against confirmation bias — and the only archive-safety incident this framework has had (change 30) happened during a `single_session` run. `hybrid` keeps the session/cache savings for authorship-side roles while guaranteeing the reviewer is a fresh process that never saw the implementation happen |
+
+## Changelog from v2.14 (v2.15)
+
+| # | Change | Rationale |
+|---|--------|-----------|
+| 36 | `log_event()` gained an explicit `task` field, separate from `detail`, and every task-scoped call site now passes it. `state.json` gained a top-level `timelines` object (`{task_id: [log entries for that task, chronological]}`), and `dashboard/index.html` renders it as a per-task Gantt-style bar (`build_timeline`) showing time spent in each status | `cmd_transition`'s generic branch logs `args.note or args.task` as `detail` — when a note is given (the common case: QA/Architect/Documenter transitions routinely carry one), `detail` contains no trace of the task id at all. Querying "this task's history" by scanning `detail` for its id therefore silently missed most of a task's own log entries — confirmed against this workspace's real register, where every noted transition across 5 real tasks had already lost its id this way. `task` fixes the data model directly rather than working around it with lossier text-matching, and unblocks anything else that wants a reliable per-task event history (this timeline; future features alike) |
 
 ## Changelog from v2.13 (v2.14)
 
@@ -492,6 +498,7 @@ Top-level keys of `state.json`:
 | `personas` | Object keyed by persona name: `{model, state, cost_label, elapsed_s, last_activity, last_20_runs}`. `last_activity` is a one-line human-readable summary of the most recent stream-json event (tool call or assistant text) from that persona's currently-running process, or `null` when idle |
 | `active_session` | `{kind, model, cost_label, elapsed_s, last_activity}` for whichever `single_session`/`hybrid_session` run is currently active, or `null`. These two run kinds use persona names that never match a `persona_model_mapping` key, so they're surfaced here instead of in `personas` |
 | `tasks` | All task register entries |
+| `timelines` | `{task_id: [log entries with that task_id, chronological]}`, one key per entry in `tasks`. Rendered by `dashboard/index.html` as a per-task Gantt-style bar (time spent in each status) |
 | `insights` | All insight register entries |
 | `budget` | `{today_tokens, limit, per_day, top_per_task}` (token counts only) |
 | `costs` | `{per_persona: {<name>: {today_usd, cumulative_usd}}}` derived from `runs.jsonl` |

@@ -648,6 +648,24 @@ def _write_dashboard_state(data, running, cfg):
         log(f"dashboard: state write failed: {e}")
 
 
+def resolve_developer_cost_label(run):
+    """Developers are spawned with the generic cost_label 'developer_run'
+    because the orchestrator doesn't know which task will be claimed until
+    the persona itself calls `hub.py claim-task` mid-run. Without this, every
+    developer spawn's cost lands on the 'developer_run' pseudo-task instead
+    of the real task id — silently zeroing out per-task cost tracking
+    (rework_usd, top_per_task) for the persona that accounts for most of the
+    token spend. Resolve the real id after the fact by reading the freshest
+    status.json and finding this agent's most recent 'claim' log event."""
+    if run.persona != "developer":
+        return run.cost_label
+    data = migrate(load_json(STATUS, {}))
+    for entry in reversed(data.get("log", [])):
+        if entry.get("agent") == run.agent_id and entry.get("action") == "claim":
+            return entry.get("detail") or run.cost_label
+    return run.cost_label
+
+
 def reap(running, lease_minutes, data=None, cfg=None):
     """Collect finished persona runs; kill any that exceeded the lease."""
     still = []
@@ -668,6 +686,7 @@ def reap(running, lease_minutes, data=None, cfg=None):
             payload = json.loads(out)
         except Exception:
             pass
+        run.cost_label = resolve_developer_cost_label(run)
         if payload:
             tokens = tokens_from_result(payload)
             cost_usd = cost_usd_from_result(payload)

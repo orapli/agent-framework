@@ -1,4 +1,4 @@
-# Multi-Agent Framework Specification v2.21
+# Multi-Agent Framework Specification v2.22
 
 Autonomous, parallel, cost-bounded optimization of a target GitHub repository by
 specialized AI personas, coordinated exclusively through file-based artifacts and
@@ -101,6 +101,13 @@ a lock-gated state register.
 | # | Change | Rationale |
 |---|--------|-----------|
 | 33 | New `execution_mode` value `hybrid`: Explorer / Architect Mode A (verdicts + task decomposition) / Developer / Documenter share one `single_session`-style process, but Architect Mode B (diff review) and QA ALWAYS spawn as separate fresh processes with their own models (`compute_hybrid_review_dispatch`, reusing `spawn()` exactly as `multi_process` does) | `single_session` amortizes spawn overhead well (SPEC §7.9, change 29) but has a structural self-review problem: the same context that authors a task's code can also be the one that approves it via Architect Mode B / QA, with only a prompt instruction ("QA review must still be genuine, not a rubber stamp") standing against confirmation bias — and the only archive-safety incident this framework has had (change 30) happened during a `single_session` run. `hybrid` keeps the session/cache savings for authorship-side roles while guaranteeing the reviewer is a fresh process that never saw the implementation happen |
+
+## Changelog from v2.21 (v2.22)
+
+| # | Change | Rationale |
+|---|--------|-----------|
+| 43 | `_transition_bucketed_costs()`: QA and Documenter batch spawns (`compute_dispatch`/`compute_hybrid_review_dispatch` dispatch "verify/finalize for: A, B, C" as ONE spawn but hardcode its cost_label to just the first task) now split tokens across every task actually transitioned during the run, using task-scoped transition log entries as CLOSING boundaries (mirrors `_session_per_task_costs`'/change 41's claim-as-OPENING-boundary approach; both now share `_bucket_message_tokens`). Falls back to the plain single-label `record_cost` when the run made no task-scoped transitions at all | Independent review noted this same misattribution pattern (fixed for Developer in change 4, for `single_session`/`hybrid` in change 41) was still present, unfixed, for direct `multi_process` QA/Documenter batches: a 3-task QA batch put 100% of its tokens on task A and 0% on B/C |
+| 44 | `_trim_log()`: `save_status`'s log cap (`log_max_entries`) now protects entries tagged with a task id that is still active (present in `data["tasks"]`, not yet archived) from eviction; only non-task-scoped entries and entries for already-archived tasks count against the cap | Independent review found a long-lived task's own dashboard timeline (`timelines[task_id]`, change 40, built by filtering `log`) could silently lose its early segments once enough unrelated log activity pushed them past a plain last-N-entries window -- the Gantt bar would just start wherever the surviving log happened to begin, understating how long the task actually spent in its early phases. Self-correcting: once a task archives, its entries become evictable again, so the log stays bounded over the framework's lifetime even though it can temporarily exceed `log_max_entries` while several long-lived tasks are active at once |
 
 ## Changelog from v2.20 (v2.21)
 
@@ -487,6 +494,9 @@ Uniform exit-code semantics:
   anything). `single_session`/`hybrid_session` split across every task they
   touch (`_session_per_task_costs`, change 41), falling back to
   `single_session_cycle`/`hybrid_session_cycle` for turns before any claim.
+  QA/Documenter batch spawns split across every task actually transitioned
+  during the run (`_transition_bucketed_costs`, change 43), falling back to
+  the plain single-label record when the run made no transitions at all.
 - `system_settings.daily_token_budget` (config) is a hard ceiling enforced by
   the orchestrator (§7.4). The budget comparison always uses **tokens** (not USD).
 - **Known gap**: `record-cost`'s per-task split (above) updates

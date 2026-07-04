@@ -157,6 +157,37 @@ if [ "$ELAPSED_MS" -gt 2000 ]; then
 fi
 unset AGENT_HUB_DIR AGENT_CONFIG AGENT_PRODUCT_DIR
 
+echo "== hub.py _trim_log: active tasks' timeline entries survive the log cap"
+python3 - "$ROOT" <<'PYEOF' || fail "_trim_log per-task protection"
+import sys
+sys.path.insert(0, sys.argv[1] + "/tools")
+import hub
+
+# Chronological append order, matching real log_event() usage.
+log = [
+    {"ts": "2026-01-01T00:00:00Z", "agent": "a", "action": "claim", "task": "task_X", "detail": "task_X"},
+    {"ts": "2026-01-01T00:00:05Z", "agent": "a", "action": "claim", "task": "task_ARCHIVED", "detail": "task_ARCHIVED"},
+]
+for i in range(20):
+    log.append({"ts": f"2026-01-01T00:{i+1:02d}:00Z", "agent": "a", "action": "verdict:accepted",
+                "task": None, "detail": f"insight_{i}"})
+
+tasks = {"task_X": {"status": "in_progress"}}  # task_ARCHIVED is NOT here -- already archived
+trimmed = hub._trim_log(log, tasks, cap=10)
+
+task_x = [e for e in trimmed if e.get("task") == "task_X"]
+archived = [e for e in trimmed if e.get("task") == "task_ARCHIVED"]
+assert len(task_x) == 1, "the still-active task_X claim entry must survive the cap"
+assert len(archived) == 0, "an already-archived task's old entry must be evicted like any other old entry"
+assert trimmed == sorted(trimmed, key=lambda e: e["ts"]), "trimmed log must remain chronologically sorted"
+assert len(trimmed) == 11, f"expected 1 protected + 10 most-recent evictable = 11, got {len(trimmed)}"
+
+# With no active/protected tasks, behavior must reduce to the original plain cap.
+assert len(hub._trim_log(log, {}, cap=10)) == 10, \
+    "with no protected tasks, must behave like the original plain [-cap:] slice"
+print("_trim_log checks OK")
+PYEOF
+
 echo "== 4/6 usage shape migration and --usd accumulation"
 SC2="$(mktemp -d)"
 CLEANUP_PATHS+=("$SC2")
@@ -403,6 +434,10 @@ class _CostRun:
     def __init__(self):
         self.agent_id, self.cost_label, self.stream_events = "hybrid-1-a", "hybrid_session_cycle", []
 
+def _iso_ts(epoch):
+    import datetime
+    return datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 def _msg_event(recv_ts, mid, in_t, out_t):
     return (recv_ts, {"type": "assistant", "message": {"id": mid,
             "usage": {"input_tokens": in_t, "output_tokens": out_t, "cache_creation_input_tokens": 0}}})
@@ -430,6 +465,44 @@ assert buckets["hybrid_session_cycle"]["tokens"] == 150, \
 assert buckets["task_A"]["tokens"] == 750, f"task_A must be 750 (deduped msg_a2), got {buckets}"
 assert buckets["task_B"]["tokens"] == 600, f"task_B must be 600, got {buckets}"
 assert "task_ignored" not in buckets, "a claim by a DIFFERENT agent must never leak into this run's bucketing"
+
+# _transition_bucketed_costs: a batched QA/Documenter spawn (compute_dispatch
+# labels the WHOLE batch's cost as approved[0]/qa_passed[0] -- the first
+# task alphabetically) must split tokens across every task it actually
+# transitioned, not dump everything on that one task.
+class _QaBatchRun:
+    def __init__(self):
+        self.agent_id, self.cost_label, self.stream_events = "qa-1-x", "task_A", []
+
+_qa_run = _QaBatchRun()
+_qbase = _time.time() - 1000
+_qa_data = {"log": [
+    {"ts": _iso_ts(_qbase + 200), "agent": "qa-1-x", "action": "approved_by_architect->qa_passed", "task": "task_A"},
+    {"ts": _iso_ts(_qbase + 500), "agent": "qa-1-x", "action": "approved_by_architect->review_failed", "task": "task_B"},
+    {"ts": _iso_ts(_qbase + 800), "agent": "qa-1-x", "action": "approved_by_architect->qa_passed", "task": "task_C"},
+    {"ts": _iso_ts(_qbase + 50), "agent": "OTHER-AGENT", "action": "approved_by_architect->qa_passed", "task": "task_ignored"},
+]}
+_qa_run.stream_events = [
+    _msg_event(_qbase + 50, "m1", 100, 50),    # before transition@200 -> task_A
+    _msg_event(_qbase + 150, "m2", 200, 100),  # before transition@200 -> task_A
+    _msg_event(_qbase + 300, "m3", 300, 150),  # between 200 and 500 -> task_B
+    _msg_event(_qbase + 600, "m4", 400, 200),  # between 500 and 800 -> task_C
+    _msg_event(_qbase + 900, "m5", 50, 25),    # after the LAST transition -> falls back to cost_label
+]
+qa_buckets = o._transition_bucketed_costs(_qa_run, _qa_data)
+assert qa_buckets["task_A"]["tokens"] == 525, f"task_A must be 525 (m1+m2 before boundary, m5 wrap-up), got {qa_buckets}"
+assert qa_buckets["task_B"]["tokens"] == 450, f"task_B must be 450, got {qa_buckets}"
+assert qa_buckets["task_C"]["tokens"] == 600, f"task_C must be 600, got {qa_buckets}"
+assert "task_ignored" not in qa_buckets, "a different agent's transition must never leak into this run's bucketing"
+
+# a run that made no task-scoped transitions at all (e.g. QA found nothing
+# to verify) must signal "nothing to bucket" so the caller falls back to
+# the plain single cost_label, not silently attribute zero tasks' worth of
+# tokens anywhere.
+_no_transition_run = _QaBatchRun()
+_no_transition_run.stream_events = [_msg_event(_qbase, "z1", 10, 5)]
+assert o._transition_bucketed_costs(_no_transition_run, {"log": []}) is None, \
+    "a run with zero task-scoped transitions must return None, not an empty/partial bucket dict"
 
 print("orchestrator.py checks OK")
 PYEOF

@@ -22,3 +22,4 @@ agent-hub/backup-*/
 agent-hub/.limit-cooldown
 agent-hub/.pending-resumes
 agent-hub/.running-registry.json
+agent-hub/.rate-limit-info.json

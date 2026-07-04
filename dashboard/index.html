@@ -363,6 +363,14 @@ h2 {
   color: var(--muted);
 }
 
+.gauge-pace {
+  font-size: 10px;
+  text-align: center;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--bg-surface0);
+}
+
 .gauge-label {
   text-align: center;
   font-size: 10px;
@@ -606,6 +614,7 @@ h2 {
     var tl     = state.timelines      || {};
     var ins    = state.insights       || {};
     var budget = state.budget         || {};
+    var pacing = state.pacing         || null;
     var costs  = state.costs          || {};
     var eff    = state.effectiveness  || {};
     var log    = state.log_tail       || [];
@@ -622,7 +631,7 @@ h2 {
       build_personas(pers, costs),
       build_timeline(tasks, tl),
       build_mid(tasks, ins, eff),
-      build_bot(budget, costs, log),
+      build_bot(budget, costs, log, pacing),
     ].join('');
   }
 
@@ -852,19 +861,30 @@ h2 {
   }
 
   /* ── bottom row ── */
-  function build_bot(budget, costs, log) {
+  function build_bot(budget, costs, log, pacing) {
     return '<div class="bot-row">' +
-      build_gauge(budget) +
+      build_gauge(budget, pacing) +
       build_daybars(budget, costs) +
       build_log(log) +
       '</div>';
   }
 
-  function build_gauge(budget) {
+  function build_gauge(budget, pacing) {
     var used  = +(budget.today_tokens || 0);
     var limit = +(budget.limit || 2000000);
     var pct   = clamp(Math.round((used / limit) * 100), 0, 100);
     var color = pct > 90 ? C.red : pct > 70 ? C.yellow : C.green;
+
+    var pace_html = '';
+    if (pacing) {
+      var spent_pct   = Math.round((pacing.spent_frac || 0) * 100);
+      var elapsed_pct = Math.round((pacing.elapsed_frac || 0) * 100);
+      var pace_color  = pacing.throttle ? C.red : C.subtext;
+      pace_html = '<div class="gauge-pace" style="color:' + pace_color + '">' +
+        (pacing.throttle ? '⏸ throttled — ' : '') +
+        'session pace: ' + spent_pct + '% spent / ' + elapsed_pct + '% of window elapsed' +
+        '</div>';
+    }
 
     return '<div class="panel">' +
       '<h2>Token Budget</h2>' +
@@ -877,6 +897,7 @@ h2 {
         '<span>' + fmt_tokens(used) + ' used</span>' +
         '<span>' + fmt_tokens(limit) + ' limit</span>' +
       '</div>' +
+      pace_html +
       '</div>';
   }
 

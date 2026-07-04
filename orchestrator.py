@@ -100,6 +100,11 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc)
 
 
+def _iso_to_epoch(ts):
+    return datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ") \
+        .replace(tzinfo=datetime.timezone.utc).timestamp()
+
+
 def log(msg):
     print(f"[{now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
@@ -340,6 +345,12 @@ class Run:
         self.stdout_lines = []
         self.last_activity = None
         self.reader_thread = None
+        # Parallel to stdout_lines: (receive_ts, parsed_event_or_None) for
+        # every line, used by _session_per_task_costs to attribute a
+        # single_session/hybrid_session run's tokens across the tasks it
+        # actually touched instead of lumping everything into the generic
+        # session cost_label.
+        self.stream_events = []
         # Populated by _drain_stderr() -- see its docstring for why this
         # exists at all (a chatty child can block on a full stderr pipe
         # exactly like stdout could before _drain_stdout existed).
@@ -394,16 +405,32 @@ def _drain_stdout(proc, run):
     writes incrementally throughout execution. If nothing drains the pipe,
     output exceeding the OS pipe buffer would block the child process from
     writing further — i.e. every long-running spawn would eventually hang
-    without a continuous reader."""
-    for line in iter(proc.stdout.readline, ""):
-        line = line.strip()
-        if not line:
-            continue
-        run.stdout_lines.append(line)
-        activity = _activity_line_from_event(line)
-        if activity:
-            run.last_activity = activity
-    proc.stdout.close()
+    without a continuous reader.
+
+    An uncaught exception here would otherwise vanish silently: a thread's
+    exception doesn't propagate to the main thread or affect the process
+    exit code, it just kills this thread and stops draining the pipe (a
+    quiet way to reintroduce the exact deadlock this function exists to
+    prevent). Caught here and logged instead, so a bug is visible rather
+    than a mysteriously-hung spawn later."""
+    try:
+        for line in iter(proc.stdout.readline, ""):
+            line = line.strip()
+            if not line:
+                continue
+            run.stdout_lines.append(line)
+            try:
+                parsed = json.loads(line)
+            except Exception:
+                parsed = None
+            run.stream_events.append((time.time(), parsed))
+            activity = _activity_line_from_event(line)
+            if activity:
+                run.last_activity = activity
+    except Exception as e:
+        log(f"_drain_stdout crashed for {run.persona} ({run.cost_label}, pid={proc.pid}): {e}")
+    finally:
+        proc.stdout.close()
 
 
 def _drain_stderr(proc, run):
@@ -417,10 +444,17 @@ def _drain_stderr(proc, run):
     (~64KB on Linux) and blocks on the next write -- confirmed by
     reproduction: a test child writing 256KB to stderr with nothing reading
     it hung indefinitely instead of exiting. Same fix as stdout: drain
-    continuously in a background thread instead of reading once at the end."""
-    for line in iter(proc.stderr.readline, ""):
-        run.stderr_lines.append(line.rstrip("\n"))
-    proc.stderr.close()
+    continuously in a background thread instead of reading once at the end.
+
+    Same silent-failure risk as _drain_stdout applies here too (see its
+    docstring) -- caught and logged rather than left to vanish."""
+    try:
+        for line in iter(proc.stderr.readline, ""):
+            run.stderr_lines.append(line.rstrip("\n"))
+    except Exception as e:
+        log(f"_drain_stderr crashed for {run.persona} ({run.cost_label}, pid={proc.pid}): {e}")
+    finally:
+        proc.stderr.close()
 
 
 def _start_reader(run):
@@ -902,9 +936,7 @@ def compute_pace(cfg, rate_info, runs):
         return None  # stale/invalid observation -- don't act on it
     elapsed_frac = (t - window_start) / window_s
     spent = sum(_tokens(r.get("tokens", 0)) for r in runs
-                if (r.get("started_at") and
-                    datetime.datetime.strptime(r["started_at"], "%Y-%m-%dT%H:%M:%SZ")
-                        .replace(tzinfo=datetime.timezone.utc).timestamp() >= window_start))
+                if r.get("started_at") and _iso_to_epoch(r["started_at"]) >= window_start)
     spent_frac = spent / budget
     # 15% tolerance: pacing smooths bursts, it isn't meant to shave off the
     # last few percent -- a hard trigger on any lead at all would throttle
@@ -1193,6 +1225,69 @@ def resolve_developer_cost_label(run):
     return run.cost_label
 
 
+def _session_per_task_costs(run, data):
+    """single_session/hybrid_session play multiple persona roles across
+    potentially several tasks in one process, so resolve_developer_cost_label
+    (which only handles multi_process's "one spawn, one developer claim"
+    case) doesn't apply -- everything lands on the generic
+    single_session_cycle/hybrid_session_cycle pseudo-task, silently zeroing
+    out per-task cost tracking for these two modes exactly the way
+    developer_run did before change 4, just structurally harder to fix
+    since one process can touch many tasks over its lifetime.
+
+    Approach: each distinct assistant message (deduped by message id --
+    content blocks belonging to the same API turn, e.g. a thinking block
+    and the text/tool_use that follows it, repeat the same `usage`) carries
+    its own per-turn token usage and a local receive timestamp (when our
+    reader thread saw the line -- not the API's own clock, but close enough
+    for attribution since it's only local pipe-read delay). Bucket each
+    message's tokens against whichever task this agent had most recently
+    `claim`-ed as of that receive time, using log entries tagged with
+    `task` (change 36). Turns before any claim (insight verdicts, initial
+    exploration) fall back to the run's own generic cost_label.
+
+    Returns {task_id_or_cost_label: {"tokens": n}}, never empty. Token sum
+    approximates but does not necessarily exactly equal tokens_from_result's
+    total for the same run -- a handful of system/thinking-only events
+    carry no usage of their own and contribute nothing to any bucket."""
+    claims = sorted(
+        (e for e in data.get("log", [])
+         if e.get("agent") == run.agent_id and e.get("action") == "claim" and e.get("task")),
+        key=lambda e: e["ts"]
+    )
+    claim_times = [(_iso_to_epoch(e["ts"]), e["task"]) for e in claims]
+
+    def task_for(ts):
+        current = None
+        for claim_ts, tid in claim_times:
+            if claim_ts <= ts:
+                current = tid
+            else:
+                break
+        return current or run.cost_label
+
+    seen_ids = set()
+    buckets = {}
+    for recv_ts, parsed in run.stream_events:
+        if not parsed or parsed.get("type") != "assistant":
+            continue
+        msg = parsed.get("message") or {}
+        mid = msg.get("id")
+        if not mid or mid in seen_ids:
+            continue
+        seen_ids.add(mid)
+        usage = msg.get("usage") or {}
+        tokens = (usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+                  + usage.get("cache_creation_input_tokens", 0))
+        if tokens <= 0:
+            continue
+        bucket = task_for(recv_ts)
+        buckets.setdefault(bucket, {"tokens": 0})["tokens"] += tokens
+    if not buckets:
+        buckets[run.cost_label] = {"tokens": 0}
+    return buckets
+
+
 def reap(running, lease_minutes, data=None, cfg=None):
     """Collect finished persona runs; kill any that exceeded the lease."""
     still = []
@@ -1225,7 +1320,17 @@ def reap(running, lease_minutes, data=None, cfg=None):
         if payload:
             tokens = tokens_from_result(payload)
             cost_usd = cost_usd_from_result(payload)
-            record_cost(run.cost_label, tokens, run.agent_id, usd=cost_usd)
+            if run.persona in ("single_session", "hybrid_session") and data is not None:
+                buckets = _session_per_task_costs(run, data)
+                total_bucketed = sum(b["tokens"] for b in buckets.values()) or 1
+                for bucket_label, b in buckets.items():
+                    record_cost(bucket_label, b["tokens"], run.agent_id,
+                                usd=round(cost_usd * (b["tokens"] / total_bucketed), 6))
+                if len(buckets) > 1 or next(iter(buckets)) != run.cost_label:
+                    log(f"{run.persona} cost split across {len(buckets)} task(s): "
+                        + ", ".join(f"{k}={v['tokens']}tok" for k, v in buckets.items()))
+            else:
+                record_cost(run.cost_label, tokens, run.agent_id, usd=cost_usd)
             _append_run(run, payload, run.proc.returncode, tokens, cost_usd)
             if _limit_hit(payload) and cfg is not None:
                 handle_limit_death(run, payload, cfg)

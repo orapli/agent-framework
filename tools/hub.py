@@ -161,11 +161,19 @@ def log_event(data, agent_id, action, detail, task=None):
 
 def sweep_expired_leases(data, agent_id):
     """Return expired in_progress tasks to todo (attempts += 1) — recovery is
-    a side effect of normal claim operation (SPEC §6.1)."""
+    a side effect of normal claim operation (SPEC §6.1). Returns the list of
+    task ids that were reset, so the caller can run worktree/branch cleanup
+    on them AFTER releasing status.lock (change 42) — that cleanup shells
+    out to git, including a `git fetch origin` that can block on network
+    I/O; doing it while every other hub.py invocation is queued behind the
+    same lock would serialize the whole framework on network latency."""
     cutoff = iso(now())
+    reset = []
     for tid, t in data["tasks"].items():
         if t["status"] == "in_progress" and t.get("lease_expires_at") and t["lease_expires_at"] < cutoff:
             _return_to_todo(data, agent_id, tid, t, "lease-expired")
+            reset.append(tid)
+    return reset
 
 
 def _task_branch(tid):
@@ -227,9 +235,11 @@ def _reclaim_stale_branch(tid):
 
 
 def _return_to_todo(data, agent_id, tid, t, reason):
-    """attempts += 1; land in todo, or blocked once max_attempts is hit."""
-    _cleanup_worktree(tid)
-    _reclaim_stale_branch(tid)
+    """attempts += 1; land in todo, or blocked once max_attempts is hit.
+    Does NOT run worktree/branch git cleanup itself (change 42) -- that is
+    the caller's job, to be done AFTER releasing status.lock. This function
+    only ever runs while the lock is held (called from sweep_expired_leases
+    and cmd_transition), so it must stay lock-safe: no network I/O here."""
     t["attempts"] = t.get("attempts", 0) + 1
     t["assignee"] = None
     t["lease_expires_at"] = None
@@ -356,42 +366,62 @@ def cmd_add_task(args):
 
 
 def cmd_claim_task(args):
+    """Claim one todo task. Note (change 42): the worktree/branch git
+    cleanup for any leases sweep_expired_leases just reset is deliberately
+    run AFTER this function's `with get_lock():` block ends, not inside it
+    -- that cleanup shells out to git, including a `git fetch origin` that
+    can block on network I/O, and doing that while every other hub.py
+    invocation is queued behind the same status.lock would serialize the
+    whole framework on network latency. This is why the loop below uses
+    `break` instead of `return` for every path: nothing may return from
+    inside the `with` block, or the cleanup after it would never run."""
     cfg = load_config()["system_settings"]
     lease_minutes = int(cfg.get("lease_minutes", 30))
+    exit_code, stdout_line, stderr_line = 3, None, None
     with get_lock():
         data = load_status()
-        sweep_expired_leases(data, args.agent_id)
+        swept = sweep_expired_leases(data, args.agent_id)
+        over_limit = False
         if args.persona == "developer":
             limit = int(cfg["concurrency_limit_developer"])
             active = sum(1 for t in data["tasks"].values() if t["status"] == "in_progress")
-            if active >= limit:
-                save_status(data)  # persist any lease sweep
-                print("concurrency limit reached", file=sys.stderr)
-                return 3
-        # File-level exclusion (SPEC §6.2): skip candidates whose target_files
-        # intersect any current in_progress task's target_files.
-        busy_files = set()
-        for t in data["tasks"].values():
-            if t["status"] == "in_progress":
-                busy_files.update(t.get("target_files", []))
-        for tid in sorted(data["tasks"]):
-            t = data["tasks"][tid]
-            if t["status"] != "todo":
-                continue
-            if busy_files & set(t.get("target_files", [])):
-                continue
-            t["status"] = "in_progress"
-            t["assignee"] = args.agent_id
-            t["branch"] = f"task-{tid.removeprefix('task_')}"
-            t["lease_expires_at"] = iso(now() + datetime.timedelta(minutes=lease_minutes))
-            log_event(data, args.agent_id, "claim", tid, task=tid)
-            save_status(data)
-            print(json.dumps({"task_id": tid, "branch": t["branch"],
-                              "worktree": f"worktrees/{t['branch']}",
-                              "lease_expires_at": t["lease_expires_at"]}))
-            return 0
-        save_status(data)  # persist any lease sweep
-        return 3
+            over_limit = active >= limit
+        if over_limit:
+            stderr_line = "concurrency limit reached"
+        else:
+            # File-level exclusion (SPEC §6.2): skip candidates whose
+            # target_files intersect any current in_progress task's.
+            busy_files = set()
+            for t in data["tasks"].values():
+                if t["status"] == "in_progress":
+                    busy_files.update(t.get("target_files", []))
+            for tid in sorted(data["tasks"]):
+                t = data["tasks"][tid]
+                if t["status"] != "todo":
+                    continue
+                if busy_files & set(t.get("target_files", [])):
+                    continue
+                t["status"] = "in_progress"
+                t["assignee"] = args.agent_id
+                t["branch"] = f"task-{tid.removeprefix('task_')}"
+                t["lease_expires_at"] = iso(now() + datetime.timedelta(minutes=lease_minutes))
+                log_event(data, args.agent_id, "claim", tid, task=tid)
+                exit_code = 0
+                stdout_line = json.dumps({"task_id": tid, "branch": t["branch"],
+                                          "worktree": f"worktrees/{t['branch']}",
+                                          "lease_expires_at": t["lease_expires_at"]})
+                break
+        save_status(data)  # persists the claim (if any) and/or the lease sweep
+    # Lock released -- worktree/branch git cleanup (network I/O) happens out
+    # here, never while status.lock is held.
+    for tid in swept:
+        _cleanup_worktree(tid)
+        _reclaim_stale_branch(tid)
+    if stdout_line is not None:
+        print(stdout_line)
+    if stderr_line is not None:
+        print(stderr_line, file=sys.stderr)
+    return exit_code
 
 
 def cmd_renew_lease(args):
@@ -421,18 +451,22 @@ def cmd_release_task(args):
         if t is None or t["status"] != "in_progress":
             print(f"task {args.task} is not in_progress", file=sys.stderr)
             return 1
-        _cleanup_worktree(args.task)
-        _reclaim_stale_branch(args.task)
         t["status"] = "todo"
         t["assignee"] = None
         t["lease_expires_at"] = None
         log_event(data, args.agent_id, "release", f"{args.task}: {args.note or 'released'}", task=args.task)
         save_status(data)
-    print(f"{args.task}: todo (attempts unchanged: {t['attempts']})")
+        attempts = t["attempts"]
+    # Lock released -- worktree/branch git cleanup (network I/O, change 42)
+    # happens out here, never while status.lock is held.
+    _cleanup_worktree(args.task)
+    _reclaim_stale_branch(args.task)
+    print(f"{args.task}: todo (attempts unchanged: {attempts})")
     return 0
 
 
 def cmd_transition(args):
+    returned_to_todo = False
     with get_lock():
         data = load_status()
         t = data["tasks"].get(args.task)
@@ -451,9 +485,11 @@ def cmd_transition(args):
             log_event(data, args.agent_id, f"{cur}->review_failed", args.note, task=args.task)
             # Automatic cascade (SPEC §4): review_failed → todo, attempts += 1
             _return_to_todo(data, args.agent_id, args.task, t, "review-failed")
+            returned_to_todo = True
         elif args.to == "todo" and cur == "in_progress":
             log_event(data, args.agent_id, "in_progress->todo", args.note or args.task, task=args.task)
             _return_to_todo(data, args.agent_id, args.task, t, args.note or "returned")
+            returned_to_todo = True
         else:
             t["status"] = args.to
             if args.to == "blocked":
@@ -469,7 +505,13 @@ def cmd_transition(args):
                 t["lease_expires_at"] = None
             log_event(data, args.agent_id, f"{cur}->{args.to}", args.note or args.task, task=args.task)
         save_status(data)
-    print(f"{args.task}: {t['status']}")
+        final_status = t["status"]
+    # Lock released -- worktree/branch git cleanup (network I/O, change 42)
+    # happens out here, never while status.lock is held.
+    if returned_to_todo:
+        _cleanup_worktree(args.task)
+        _reclaim_stale_branch(args.task)
+    print(f"{args.task}: {final_status}")
     return 0
 
 

@@ -1,4 +1,4 @@
-# Multi-Agent Framework Specification v2.20
+# Multi-Agent Framework Specification v2.21
 
 Autonomous, parallel, cost-bounded optimization of a target GitHub repository by
 specialized AI personas, coordinated exclusively through file-based artifacts and
@@ -101,6 +101,12 @@ a lock-gated state register.
 | # | Change | Rationale |
 |---|--------|-----------|
 | 33 | New `execution_mode` value `hybrid`: Explorer / Architect Mode A (verdicts + task decomposition) / Developer / Documenter share one `single_session`-style process, but Architect Mode B (diff review) and QA ALWAYS spawn as separate fresh processes with their own models (`compute_hybrid_review_dispatch`, reusing `spawn()` exactly as `multi_process` does) | `single_session` amortizes spawn overhead well (SPEC §7.9, change 29) but has a structural self-review problem: the same context that authors a task's code can also be the one that approves it via Architect Mode B / QA, with only a prompt instruction ("QA review must still be genuine, not a rubber stamp") standing against confirmation bias — and the only archive-safety incident this framework has had (change 30) happened during a `single_session` run. `hybrid` keeps the session/cache savings for authorship-side roles while guaranteeing the reviewer is a fresh process that never saw the implementation happen |
+
+## Changelog from v2.20 (v2.21)
+
+| # | Change | Rationale |
+|---|--------|-----------|
+| 42 | Worktree/branch git cleanup (`_cleanup_worktree`/`_reclaim_stale_branch`, changes 6 and "Reclaim the leftover local branch") now always runs AFTER `status.lock` is released, never while holding it. `_return_to_todo` no longer calls them itself; `sweep_expired_leases` returns the list of reset task ids instead. `cmd_claim_task` restructured to use `break` instead of early `return` inside its `with get_lock():` block (three exit paths previously returned directly from inside the lock, which would have skipped any post-lock cleanup); `cmd_transition` and `cmd_release_task` similarly defer their calls to after the block ends | Independent review found `_reclaim_stale_branch`'s `git fetch origin <branch>` (network I/O) ran while `status.lock` was held, serializing every other `hub.py` invocation in the workspace behind however long that fetch takes -- on a slow or degraded connection, effectively a framework-wide stall. Confirmed via a reproduction that deliberately slows the fetch (a fake SSH remote sleeping several seconds) and measures a concurrent `claim-task`'s wall-clock time: before this fix, the concurrent call blocked for the full fetch duration; after, it returned in tens of milliseconds. Reverting the fix locally and re-running the same test confirmed it actually detects the regression, not just passes trivially |
 
 ## Changelog from v2.19 (v2.20)
 

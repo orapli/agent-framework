@@ -1,0 +1,23 @@
+# Workspace-local state — never shared between workspaces (see SPEC.md §15.1)
+config.json
+shared-cache/
+knowledge/
+agent-hub/status.json
+agent-hub/status.lock
+agent-hub/digest.md
+agent-hub/cycle-status.md
+agent-hub/github-cache/
+agent-hub/archive/
+agent-hub/01_insights/*
+agent-hub/02_tasks/*
+agent-hub/03_reports/*
+!agent-hub/01_insights/.gitkeep
+!agent-hub/02_tasks/.gitkeep
+!agent-hub/03_reports/.gitkeep
+
+# Python bytecode
+__pycache__/
+agent-hub/dashboard/
+agent-hub/backup-*/
+agent-hub/.limit-cooldown
+agent-hub/.pending-resumes

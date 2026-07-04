@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>orapli — Orchestrator Dashboard</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-base:     #1e1e2e;
+  --bg-mantle:   #181825;
+  --bg-surface0: #313244;
+  --bg-surface1: #45475a;
+  --bg-overlay0: #6c7086;
+  --text:        #cdd6f4;
+  --subtext:     #a6adc8;
+  --muted:       #585b70;
+  --accent:      #89b4fa;
+  --yellow:      #f9e2af;
+  --green:       #a6e3a1;
+  --red:         #f38ba8;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text);
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 16px;
+  min-height: 100vh;
+}
+
+h2 {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--subtext);
+  margin-bottom: 8px;
+}
+
+/* ── header ── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--bg-surface1);
+}
+
+.header h1 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.05em;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.badge-running { background: var(--green);  color: #1e1e2e; }
+.badge-stopped { background: var(--red);    color: #1e1e2e; }
+.badge-waiting { background: var(--yellow); color: #1e1e2e; }
+.badge-idle    { background: var(--bg-surface1); color: var(--subtext); }
+
+.orch-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.heartbeat {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+/* ── persona row ── */
+.persona-row {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.persona-card {
+  background: var(--bg-mantle);
+  border: 1px solid var(--bg-surface0);
+  border-radius: 8px;
+  padding: 10px 12px;
+  border-top-width: 3px;
+}
+
+.persona-name {
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+
+.persona-model {
+  font-size: 10px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  word-break: break-all;
+}
+
+.persona-state { margin-bottom: 4px; }
+
+.persona-work {
+  font-size: 11px;
+  color: var(--subtext);
+  word-break: break-all;
+  margin-top: 4px;
+}
+
+.persona-cost {
+  font-size: 11px;
+  color: var(--yellow);
+  margin-top: 6px;
+}
+
+/* ── middle row ── */
+.mid-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.panel {
+  background: var(--bg-mantle);
+  border: 1px solid var(--bg-surface0);
+  border-radius: 8px;
+  padding: 12px;
+  overflow: hidden;
+}
+
+/* kanban */
+.kanban-cols {
+  display: flex;
+  gap: 6px;
+}
+
+.kanban-col { flex: 1; min-width: 0; }
+
+.kanban-col-title {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--bg-surface0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kanban-count {
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.kanban-card {
+  background: var(--bg-surface0);
+  border-radius: 4px;
+  padding: 4px 6px;
+  margin-bottom: 4px;
+  font-size: 10px;
+  color: var(--subtext);
+}
+
+.kanban-card-id {
+  font-size: 9px;
+  color: var(--accent);
+  margin-bottom: 1px;
+}
+
+.kanban-empty {
+  font-size: 10px;
+  color: var(--muted);
+  padding: 2px 0;
+}
+
+/* insight summary */
+.insight-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--bg-surface0);
+  font-size: 11px;
+}
+.insight-item:last-child { border-bottom: none; }
+.insight-id { font-size: 10px; color: var(--accent); flex-shrink: 0; }
+.insight-meta { font-size: 10px; color: var(--muted); flex-shrink: 0; }
+
+/* effectiveness funnel */
+.funnel-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+  font-size: 11px;
+}
+
+.funnel-label {
+  color: var(--subtext);
+  width: 88px;
+  flex-shrink: 0;
+  font-size: 10px;
+}
+
+.funnel-bar-wrap {
+  flex: 1;
+  height: 10px;
+  background: var(--bg-surface0);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.funnel-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+}
+
+.funnel-count {
+  width: 24px;
+  text-align: right;
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.funnel-footer {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.funnel-footer span { color: var(--yellow); }
+
+/* ── bottom row ── */
+.bot-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr 1fr;
+  gap: 8px;
+}
+
+/* budget gauge */
+.gauge-pct {
+  font-size: 28px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.2;
+  margin: 4px 0;
+}
+
+.gauge-bar-wrap {
+  background: var(--bg-surface0);
+  border-radius: 8px;
+  height: 14px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.gauge-bar {
+  height: 100%;
+  border-radius: 8px;
+}
+
+.gauge-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.gauge-label {
+  text-align: center;
+  font-size: 10px;
+  color: var(--subtext);
+  margin-top: 2px;
+}
+
+/* stacked bar chart */
+.chart-area {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 100px;
+  margin-bottom: 4px;
+}
+
+.day-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  height: 100%;
+  justify-content: flex-end;
+  gap: 0;
+}
+
+.bar-stack {
+  display: flex;
+  flex-direction: column-reverse;
+  width: 100%;
+  border-radius: 3px 3px 0 0;
+  overflow: hidden;
+}
+
+.bar-seg {
+  width: 100%;
+  min-height: 1px;
+}
+
+.day-label {
+  font-size: 9px;
+  color: var(--muted);
+  margin-top: 4px;
+  text-align: center;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--subtext);
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* event log */
+.log-scroll {
+  max-height: 180px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-surface1) transparent;
+}
+
+.log-entry {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--bg-surface0);
+  font-size: 10px;
+}
+
+.log-entry:last-child { border-bottom: none; }
+
+.log-ts {
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  width: 60px;
+}
+
+.log-msg { color: var(--subtext); word-break: break-word; }
+
+/* placeholder */
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  gap: 12px;
+}
+
+.placeholder h1 { font-size: 18px; color: var(--accent); }
+.placeholder p  { font-size: 12px; color: var(--muted); }
+.placeholder code { color: var(--subtext); }
+
+/* refresh indicator */
+.refresh-tick {
+  position: fixed;
+  bottom: 12px;
+  right: 16px;
+  font-size: 10px;
+  color: var(--muted);
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div class="refresh-tick" id="tick"></div>
+
+<script>
+(function () {
+  /* ── palette tokens ── */
+  var C = {
+    bg_base:     '#1e1e2e',
+    bg_mantle:   '#181825',
+    bg_surface0: '#313244',
+    bg_surface1: '#45475a',
+    text:        '#cdd6f4',
+    subtext:     '#a6adc8',
+    muted:       '#585b70',
+    accent:      '#89b4fa',
+    yellow:      '#f9e2af',
+    green:       '#a6e3a1',
+    red:         '#f38ba8',
+  };
+
+  /* per-persona accent colors (Catppuccin Mocha named hues) */
+  var PERSONA_COLOR = {
+    explorer:   '#cba6f7',  /* mauve  */
+    architect:  '#89b4fa',  /* blue   */
+    developer:  '#a6e3a1',  /* green  */
+    qa_tester:  '#f9e2af',  /* yellow */
+    documenter: '#89dceb',  /* sky    */
+  };
+
+  var PERSONA_NAMES = ['explorer', 'architect', 'developer', 'qa_tester', 'documenter'];
+
+  var STATUS_COLOR = {
+    todo:                   '#585b70',
+    in_progress:            '#89b4fa',
+    implemented:            '#cba6f7',
+    approved_by_architect:  '#89dceb',
+    review_failed:          '#f38ba8',
+    qa_passed:              '#a6e3a1',
+    pending_human_build:    '#f9e2af',
+    merged:                 '#a6e3a1',
+    archived:               '#45475a',
+    blocked:                '#f38ba8',
+  };
+
+  var KANBAN_COLS = [
+    'todo', 'in_progress', 'implemented',
+    'approved_by_architect', 'review_failed',
+    'qa_passed', 'pending_human_build', 'merged', 'blocked',
+  ];
+
+  /* ── helpers ── */
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function fmt_usd(v) {
+    if (v == null || v === '') return '—';
+    var n = +v;
+    return isNaN(n) ? '—' : '$' + n.toFixed(4);
+  }
+
+  function fmt_tokens(n) {
+    if (n == null) return '—';
+    n = +n;
+    if (isNaN(n)) return '—';
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+    return String(n);
+  }
+
+  function fmt_elapsed(s) {
+    if (s == null) return '';
+    s = Math.round(+s);
+    if (s < 60) return s + 's';
+    if (s < 3600) return Math.floor(s / 60) + 'm' + (s % 60) + 's';
+    return Math.floor(s / 3600) + 'h' + Math.floor((s % 3600) / 60) + 'm';
+  }
+
+  function ts_hms(iso) {
+    if (!iso) return '';
+    try {
+      var d = new Date(iso);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch (e) { return String(iso).slice(11, 19) || ''; }
+  }
+
+  function date_md(iso) {
+    if (!iso) return '';
+    try {
+      var d = new Date(iso);
+      return (d.getMonth() + 1) + '/' + d.getDate();
+    } catch (e) { return String(iso).slice(5, 10) || ''; }
+  }
+
+  function clamp(v, lo, hi) {
+    return Math.max(lo, Math.min(hi, v));
+  }
+
+  /* ── render ── */
+  function render(state) {
+    var root = document.getElementById('root');
+    if (!state) {
+      root.innerHTML =
+        '<div class="placeholder">' +
+          '<h1>orapli Orchestrator Dashboard</h1>' +
+          '<p>Waiting for orchestrator state…</p>' +
+          '<p><code>../agent-hub/dashboard/state.js</code></p>' +
+        '</div>';
+      return;
+    }
+
+    root.innerHTML = build(state);
+  }
+
+  function build(state) {
+    var orch   = state.orchestrator  || {};
+    var pers   = state.personas      || {};
+    var tasks  = state.tasks         || {};
+    var ins    = state.insights      || {};
+    var budget = state.budget        || {};
+    var costs  = state.costs         || {};
+    var eff    = state.effectiveness || {};
+    var log    = state.log_tail      || [];
+
+    /* staleness */
+    var poll_s   = +(orch.poll_seconds || 60);
+    var hb_ms    = orch.heartbeat ? new Date(orch.heartbeat).getTime() : 0;
+    var stale_ms = poll_s * 2 * 1000;
+    var orch_ok  = hb_ms > 0 && (Date.now() - hb_ms) <= stale_ms;
+
+    return [
+      build_header(orch, orch_ok),
+      build_personas(pers, costs),
+      build_mid(tasks, ins, eff),
+      build_bot(budget, costs, log),
+    ].join('');
+  }
+
+  /* ── header ── */
+  function build_header(orch, orch_ok) {
+    var badge;
+    if (!orch.heartbeat) {
+      badge = '<span class="badge badge-waiting">waiting</span>';
+    } else if (orch_ok) {
+      badge = '<span class="badge badge-running">running</span>';
+    } else {
+      badge = '<span class="badge badge-stopped">stopped 停止中</span>';
+    }
+
+    return '<div class="header">' +
+      '<h1>orapli Dashboard</h1>' +
+      badge +
+      '<span class="orch-meta">PID ' + esc(orch.pid || '—') +
+        ' | poll ' + esc(orch.poll_seconds || '—') + 's</span>' +
+      '<span class="heartbeat">♥ ' +
+        (orch.heartbeat ? ts_hms(orch.heartbeat) : 'never') + '</span>' +
+      '</div>';
+  }
+
+  /* ── persona cards ── */
+  function build_personas(pers, costs) {
+    var cards = PERSONA_NAMES.map(function (name) {
+      var p = pers[name] || {};
+      var c = (costs.per_persona || {})[name] || {};
+      var col = PERSONA_COLOR[name] || C.accent;
+      var running = p.state === 'running';
+      var state_badge = running
+        ? '<span class="badge badge-running" style="font-size:10px">running</span>'
+        : '<span class="badge badge-idle"    style="font-size:10px">idle</span>';
+
+      var work_html = '';
+      if (running && p.cost_label) {
+        work_html = '<div class="persona-work">' +
+          esc(p.cost_label) +
+          (p.elapsed_s != null ? ' (' + fmt_elapsed(p.elapsed_s) + ')' : '') +
+          '</div>';
+      }
+
+      return '<div class="persona-card" style="border-top-color:' + col + '">' +
+        '<div class="persona-name" style="color:' + col + '">' + esc(name) + '</div>' +
+        '<div class="persona-model">' + esc(p.model || '—') + '</div>' +
+        '<div class="persona-state">' + state_badge + '</div>' +
+        work_html +
+        '<div class="persona-cost">↑ ' + fmt_usd(c.today_usd) + ' today</div>' +
+        '</div>';
+    }).join('');
+
+    return '<div class="persona-row">' + cards + '</div>';
+  }
+
+  /* ── middle row ── */
+  function build_mid(tasks, insights, eff) {
+    return '<div class="mid-row">' +
+      build_kanban(tasks) +
+      build_insights(insights) +
+      build_funnel(eff) +
+      '</div>';
+  }
+
+  function build_kanban(tasks) {
+    var by_status = {};
+    KANBAN_COLS.forEach(function (s) { by_status[s] = []; });
+    Object.keys(tasks).forEach(function (id) {
+      var t = tasks[id];
+      var s = t.status || 'todo';
+      if (!by_status[s]) by_status[s] = [];
+      by_status[s].push({ id: id, title: t.title || '' });
+    });
+
+    var cols = KANBAN_COLS.map(function (s) {
+      var items = by_status[s] || [];
+      var col_color = STATUS_COLOR[s] || C.muted;
+      var label = s.replace(/_/g, ' ');
+      var cards = items.length
+        ? items.map(function (t) {
+            var short = t.title.length > 50 ? t.title.slice(0, 50) + '…' : t.title;
+            return '<div class="kanban-card">' +
+              '<div class="kanban-card-id">' + esc(t.id) + '</div>' +
+              esc(short) +
+              '</div>';
+          }).join('')
+        : '<div class="kanban-empty">—</div>';
+
+      return '<div class="kanban-col">' +
+        '<div class="kanban-col-title" style="color:' + col_color + '">' +
+          esc(label) + ' <span class="kanban-count">(' + items.length + ')</span>' +
+        '</div>' +
+        cards +
+        '</div>';
+    }).join('');
+
+    return '<div class="panel"><h2>Tasks</h2><div class="kanban-cols">' + cols + '</div></div>';
+  }
+
+  function build_insights(insights) {
+    var ids = Object.keys(insights);
+    var rows = ids.length
+      ? ids.map(function (id) {
+          var ins = insights[id];
+          var status_color = {
+            proposed: C.yellow,
+            accepted:  C.accent,
+            rejected:  C.red,
+            done:      C.green,
+          }[ins.status] || C.muted;
+          return '<div class="insight-item">' +
+            '<span class="insight-id">' + esc(id.slice(0, 14)) + '</span>' +
+            '<span style="color:' + status_color + ';font-size:10px;font-weight:700">' +
+              esc(ins.status || '?') + '</span>' +
+            '<span class="insight-meta">' + esc(ins.category || '') + '</span>' +
+            '</div>';
+        }).join('')
+      : '<div style="color:var(--muted);font-size:11px">No insights</div>';
+
+    return '<div class="panel"><h2>Insights</h2>' + rows + '</div>';
+  }
+
+  function build_funnel(eff) {
+    var funnel = eff.funnel || {};
+    var steps = [
+      { key: 'proposed',        label: 'Proposed' },
+      { key: 'accepted',        label: 'Accepted' },
+      { key: 'tasks_generated', label: 'Tasks' },
+      { key: 'implemented',     label: 'Implemented' },
+      { key: 'merged',          label: 'Merged' },
+    ];
+    var max_v = Math.max(1, funnel.proposed || 0);
+
+    var rows = steps.map(function (step) {
+      var v = +(funnel[step.key] || 0);
+      var pct = clamp(Math.round((v / max_v) * 100), 0, 100);
+      return '<div class="funnel-step">' +
+        '<span class="funnel-label">' + esc(step.label) + '</span>' +
+        '<div class="funnel-bar-wrap"><div class="funnel-bar" style="width:' + pct + '%"></div></div>' +
+        '<span class="funnel-count">' + v + '</span>' +
+        '</div>';
+    }).join('');
+
+    var merged = +(funnel.merged || 0);
+    var cum_usd = eff.cumulative_usd;
+    var per_merged = merged > 0 && cum_usd != null
+      ? fmt_usd(cum_usd / merged)
+      : '—';
+
+    var footer = '<div class="funnel-footer">' +
+      '<div>Cumulative: <span>' + fmt_usd(cum_usd) + '</span></div>' +
+      '<div>Per merged task: <span>' + per_merged + '</span></div>' +
+      '<div>Rework cost: <span>' + fmt_usd(eff.rework_usd) + '</span></div>' +
+      '</div>';
+
+    return '<div class="panel"><h2>Effectiveness</h2>' + rows + footer + '</div>';
+  }
+
+  /* ── bottom row ── */
+  function build_bot(budget, costs, log) {
+    return '<div class="bot-row">' +
+      build_gauge(budget) +
+      build_daybars(budget, costs) +
+      build_log(log) +
+      '</div>';
+  }
+
+  function build_gauge(budget) {
+    var used  = +(budget.today_tokens || 0);
+    var limit = +(budget.limit || 2000000);
+    var pct   = clamp(Math.round((used / limit) * 100), 0, 100);
+    var color = pct > 90 ? C.red : pct > 70 ? C.yellow : C.green;
+
+    return '<div class="panel">' +
+      '<h2>Token Budget</h2>' +
+      '<div class="gauge-pct" style="color:' + color + '">' + pct + '%</div>' +
+      '<div class="gauge-label">of daily limit</div>' +
+      '<div class="gauge-bar-wrap">' +
+        '<div class="gauge-bar" style="width:' + pct + '%;background:' + color + '"></div>' +
+      '</div>' +
+      '<div class="gauge-row">' +
+        '<span>' + fmt_tokens(used) + ' used</span>' +
+        '<span>' + fmt_tokens(limit) + ' limit</span>' +
+      '</div>' +
+      '</div>';
+  }
+
+  function build_daybars(budget, costs) {
+    var per_day = budget.per_day || {};
+    var per_day_persona = costs.per_day_persona || null;
+
+    var days = Object.keys(per_day).sort().slice(-7);
+
+    if (!days.length) {
+      return '<div class="panel"><h2>Token Usage / Day</h2>' +
+        '<div style="color:var(--muted);font-size:11px;margin-top:8px">No data yet</div></div>';
+    }
+
+    /* compute max for scaling */
+    var max_t = 1;
+    days.forEach(function (d) {
+      var v = per_day[d];
+      var t = typeof v === 'object' && v ? (+(v.tokens || 0)) : (+v || 0);
+      if (t > max_t) max_t = t;
+    });
+
+    var bars = days.map(function (d) {
+      var v = per_day[d];
+      var total = typeof v === 'object' && v ? (+(v.tokens || 0)) : (+v || 0);
+      var h_pct = clamp(Math.round((total / max_t) * 100), 0, 100);
+
+      var stack_html;
+      if (per_day_persona && per_day_persona[d]) {
+        var ppd = per_day_persona[d];
+        /* stacked segments in persona order (bottom = explorer) */
+        var segs = PERSONA_NAMES.map(function (name) {
+          var t = +(ppd[name] || 0);
+          var seg_pct = clamp(Math.round((t / max_t) * 100), 0, 100);
+          return '<div class="bar-seg" style="height:' + seg_pct + '%;background:' +
+            (PERSONA_COLOR[name] || C.accent) + '"></div>';
+        }).join('');
+        stack_html = '<div class="bar-stack" style="height:' + h_pct + '%">' + segs + '</div>';
+      } else {
+        stack_html = '<div class="bar-stack" style="height:' + h_pct + '%;background:' +
+          C.accent + '"></div>';
+      }
+
+      return '<div class="day-group">' + stack_html +
+        '<div class="day-label">' + esc(date_md(d)) + '</div>' +
+        '</div>';
+    }).join('');
+
+    var legend_html = per_day_persona
+      ? '<div class="legend">' + PERSONA_NAMES.map(function (name) {
+          return '<div class="legend-item">' +
+            '<div class="legend-dot" style="background:' + (PERSONA_COLOR[name] || C.accent) + '"></div>' +
+            esc(name) + '</div>';
+        }).join('') + '</div>'
+      : '';
+
+    return '<div class="panel"><h2>Token Usage / Day</h2>' +
+      '<div class="chart-area">' + bars + '</div>' +
+      legend_html +
+      '</div>';
+  }
+
+  function build_log(log) {
+    var entries = log.slice(0, 50).map(function (e) {
+      var ts, msg;
+      if (typeof e === 'object' && e) {
+        ts  = e.ts || '';
+        msg = e.action
+          ? (e.agent ? '[' + e.agent + '] ' : '') + e.action + (e.detail ? ': ' + e.detail : '')
+          : (e.event || e.msg || JSON.stringify(e));
+      } else {
+        ts = ''; msg = String(e);
+      }
+      return '<div class="log-entry">' +
+        '<span class="log-ts">' + esc(ts_hms(ts)) + '</span>' +
+        '<span class="log-msg">' + esc(msg) + '</span>' +
+        '</div>';
+    }).join('') || '<div style="color:var(--muted);font-size:11px">No events</div>';
+
+    return '<div class="panel"><h2>Event Log</h2>' +
+      '<div class="log-scroll">' + entries + '</div>' +
+      '</div>';
+  }
+
+  /* ── auto-refresh via script-tag replacement ── */
+  var _script = null;
+  var _tick_el = document.getElementById('tick');
+
+  function load_state() {
+    if (_script && _script.parentNode) {
+      _script.parentNode.removeChild(_script);
+    }
+    var s = document.createElement('script');
+    s.src = '../agent-hub/dashboard/state.js?t=' + Date.now();
+    s.onload = function () {
+      var state = (typeof window.__ORAPLI_STATE__ !== 'undefined')
+        ? window.__ORAPLI_STATE__ : null;
+      render(state);
+      if (_tick_el) {
+        _tick_el.textContent = 'Updated ' + new Date().toLocaleTimeString();
+      }
+    };
+    s.onerror = function () {
+      render(null);
+    };
+    _script = s;
+    document.head.appendChild(s);
+  }
+
+  /* show placeholder while first load is in flight */
+  render(null);
+  load_state();
+  setInterval(load_state, 5000);
+}());
+</script>
+</body>
+</html>

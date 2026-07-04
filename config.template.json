@@ -1,0 +1,48 @@
+{
+  "system_settings": {
+    "project_id": "UNSET",
+    "concurrency_limit_developer": 4,
+    "lease_minutes": 30,
+    "max_attempts": 3,
+    "daily_token_budget": 2000000,
+    "log_max_entries": 500,
+    "orchestrator_poll_seconds": 60,
+    "issue_sync_minutes": 60,
+    "max_concurrent_spawns": 2,
+    "limit_cooldown_fallback_minutes": 30,
+    "execution_mode": "multi_process",
+    "single_session_model": "claude-sonnet-4-6"
+  },
+  "persona_model_mapping": {
+    "explorer": {
+      "model": "claude-fable-5",
+      "temperature": 0.1,
+      "max_tokens": 8192
+    },
+    "architect": {
+      "model": "claude-opus-4-8",
+      "temperature": 0.0,
+      "max_tokens": 8192
+    },
+    "developer": {
+      "model": "claude-sonnet-4-6",
+      "temperature": 0.4,
+      "max_tokens": 8192
+    },
+    "qa_tester": {
+      "model": "claude-sonnet-4-6",
+      "temperature": 0.2,
+      "max_tokens": 4096
+    },
+    "documenter": {
+      "model": "claude-haiku-4-5-20251001",
+      "temperature": 0.3,
+      "max_tokens": 4096
+    },
+    "architect_review": {
+      "model": "claude-sonnet-4-6",
+      "temperature": 0.0,
+      "max_tokens": 8192
+    }
+  }
+}

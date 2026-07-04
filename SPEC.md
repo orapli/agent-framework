@@ -1,4 +1,4 @@
-# Multi-Agent Framework Specification v2.15
+# Multi-Agent Framework Specification v2.16
 
 Autonomous, parallel, cost-bounded optimization of a target GitHub repository by
 specialized AI personas, coordinated exclusively through file-based artifacts and
@@ -101,6 +101,12 @@ a lock-gated state register.
 | # | Change | Rationale |
 |---|--------|-----------|
 | 33 | New `execution_mode` value `hybrid`: Explorer / Architect Mode A (verdicts + task decomposition) / Developer / Documenter share one `single_session`-style process, but Architect Mode B (diff review) and QA ALWAYS spawn as separate fresh processes with their own models (`compute_hybrid_review_dispatch`, reusing `spawn()` exactly as `multi_process` does) | `single_session` amortizes spawn overhead well (SPEC §7.9, change 29) but has a structural self-review problem: the same context that authors a task's code can also be the one that approves it via Architect Mode B / QA, with only a prompt instruction ("QA review must still be genuine, not a rubber stamp") standing against confirmation bias — and the only archive-safety incident this framework has had (change 30) happened during a `single_session` run. `hybrid` keeps the session/cache savings for authorship-side roles while guaranteeing the reviewer is a fresh process that never saw the implementation happen |
+
+## Changelog from v2.15 (v2.16)
+
+| # | Change | Rationale |
+|---|--------|-----------|
+| 37 | Wired the previously-unconsumed issue mirror (§12.1) into the Explorer→Architect pipeline: insight registry entries gained a `source` field (`"github#<n>"` or `null`); `personas/explorer.md`'s I/O contract, schema, and dedup step now reference `agent-hub/github-cache/issues.json` explicitly; `orchestrator.py`'s new `_prioritize_proposed_insights()` sorts github-sourced proposed insights ahead of self-generated ones in `compute_dispatch`, `build_single_session_prompt`, and `build_hybrid_session_prompt` alike; the dashboard shows a 🔗 source badge on issue-derived insights | The issue mirror synced correctly (zero-token, every `issue_sync_minutes`) but nothing ever read it — Explorer's own I/O contract never mentioned the file's existence, and the insight schema had no field to record provenance even if it had. A real user-filed issue is a confirmed problem; Explorer's own finds are comparatively speculative, so once one is mirrored it should reach the Architect's queue ahead of self-generated insights, not tie-break arbitrarily by insight-id |
 
 ## Changelog from v2.14 (v2.15)
 
@@ -567,14 +573,22 @@ routine review runs cheaper; if absent, Mode B falls back to `architect`.
 
 The orchestrator maintains `agent-hub/github-cache/issues.json`: a normalized,
 compact mirror of open issues (number, title, labels, state, truncated body),
-refreshed every `issue_sync_minutes` (default 60) via the `gh` CLI. Syncing
+refreshed every `issue_sync_minutes` (default 60) via plain HTTPS against the
+GitHub API (not the `gh` CLI — `gh` auth is unavailable in the sandbox; the
+sandbox network proxy injects credentials transparently instead). Syncing
 happens outside the LLM and costs zero tokens; agents read one small local
 file instead of repeatedly fetching and parsing API responses.
 
 - Agents MUST NOT call the GitHub API or `gh` to read issues; the mirror is
   the only sanctioned source.
 - Explorer treats mirrored issues as an additional observation input and may
-  derive Insights from them (`source: "github#<n>"`).
+  derive Insights from them (`source: "github#<n>"`) — wired in change 37:
+  the persona's I/O contract, schema, and dedup step all reference the
+  mirror explicitly, and the Architect's verdict queue
+  (`orchestrator.py` `_prioritize_proposed_insights`) sorts these ahead of
+  self-generated ones in `compute_dispatch`, `build_single_session_prompt`,
+  and `build_hybrid_session_prompt` alike. Before change 37, the mirror
+  synced correctly but nothing actually consumed it.
 - The mirror is read-only in v2.1: agents do not comment on, label, or close
   issues. Write-back is a future extension requiring its own approval.
 

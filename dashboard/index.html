@@ -272,6 +272,12 @@ h2 {
 .insight-item:last-child { border-bottom: none; }
 .insight-id { font-size: 10px; color: var(--accent); flex-shrink: 0; }
 .insight-meta { font-size: 10px; color: var(--muted); flex-shrink: 0; }
+.insight-source {
+  font-size: 10px;
+  color: var(--yellow);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 
 /* effectiveness funnel */
 .funnel-step {
@@ -792,11 +798,16 @@ h2 {
             rejected:  C.red,
             done:      C.green,
           }[ins.status] || C.muted;
+          var source_badge = ins.source
+            ? '<span class="insight-source" title="derived from a real GitHub issue">🔗 ' +
+                esc(ins.source) + '</span>'
+            : '';
           return '<div class="insight-item">' +
             '<span class="insight-id">' + esc(id.slice(0, 14)) + '</span>' +
             '<span style="color:' + status_color + ';font-size:10px;font-weight:700">' +
               esc(ins.status || '?') + '</span>' +
             '<span class="insight-meta">' + esc(ins.category || '') + '</span>' +
+            source_badge +
             '</div>';
         }).join('')
       : '<div style="color:var(--muted);font-size:11px">No insights</div>';

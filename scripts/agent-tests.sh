@@ -47,6 +47,10 @@ cat > "$SC/t.json" <<'EOF'
 {"task_id":"task_001","insight_id":"insight_smoke001","title":"smoke",
  "target_files":["x"],"status":"todo"}
 EOF
+cat > "$SC/i-github.json" <<'EOF'
+{"insight_id":"insight_smoke002","category":"debt","severity":"low","source":"github#42",
+ "subject_paths":["y"],"observation":"s","impact":"s","suggested_direction":"s"}
+EOF
 
 export AGENT_HUB_DIR="$SC" AGENT_CONFIG="$SC/config.json" AGENT_PRODUCT_DIR="$FAKE_PRODUCT"
 HUB=(python3 "$ROOT/tools/hub.py" --agent-id smoke)
@@ -54,6 +58,13 @@ HUB=(python3 "$ROOT/tools/hub.py" --agent-id smoke)
 fail() { echo "SMOKE FAIL: $1" >&2; exit 1; }
 
 "${HUB[@]}" add-insight --file "$SC/i.json" >/dev/null || fail "add-insight"
+"${HUB[@]}" add-insight --file "$SC/i-github.json" >/dev/null || fail "add-insight (github-sourced)"
+python3 - "$SC/status.json" <<'PYEOF' || fail "insight source field"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["insights"]["insight_smoke001"]["source"] is None, "insight without a source must default to null"
+assert d["insights"]["insight_smoke002"]["source"] == "github#42", "github-sourced insight must record its source"
+PYEOF
 "${HUB[@]}" insight-verdict --insight insight_smoke001 --to rejected 2>/dev/null \
   && fail "verdict rejected without --reason must exit non-zero"
 "${HUB[@]}" insight-verdict --insight insight_smoke001 --to accepted >/dev/null || fail "verdict"
@@ -215,6 +226,19 @@ assert "insight_a" in hybrid_prompt and "task_003" in hybrid_prompt, \
 already_running = [type("R", (), {"persona": "architect"})(), type("R", (), {"persona": "qa_tester"})()]
 assert o.compute_hybrid_review_dispatch(data, already_running, cfg2) == [], \
     "must not re-dispatch architect/qa_tester while one is already running"
+
+# github-issue-derived insights (SPEC 12.1) must sort ahead of self-generated
+# ones in the Architect's verdict queue -- a confirmed user report outranks
+# speculative exploration.
+insights_mixed = {
+    "insight_zzz_selfgen": {"status": "proposed", "source": None},
+    "insight_aaa_selfgen": {"status": "proposed", "source": None},
+    "insight_mmm_github":  {"status": "proposed", "source": "github#7"},
+    "insight_done_already": {"status": "accepted", "source": None},
+}
+order = o._prioritize_proposed_insights(insights_mixed)
+assert order == ["insight_mmm_github", "insight_aaa_selfgen", "insight_zzz_selfgen"], \
+    f"github-sourced insight must come first despite losing alphabetically, got {order}"
 
 print("orchestrator.py checks OK")
 PYEOF

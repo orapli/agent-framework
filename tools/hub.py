@@ -113,6 +113,7 @@ def migrate(data):
     for ins in data.setdefault("insights", {}).values():
         if "status" not in ins:
             ins["status"] = "accepted" if ins.get("tasks_generated") else "proposed"
+        ins.setdefault("source", None)
     for t in data.setdefault("tasks", {}).values():
         t.setdefault("attempts", 0)
         t.setdefault("target_files", [])
@@ -259,6 +260,7 @@ def cmd_add_insight(args):
         data["insights"][iid] = {
             "category": insight.get("category"),
             "severity": insight.get("severity"),
+            "source": insight.get("source"),
             "status": "proposed",
             "tasks_generated": False,
         }

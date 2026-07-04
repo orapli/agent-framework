@@ -269,13 +269,26 @@ def build_single_session_system_prompt(agent_id):
     return "\n".join(parts)
 
 
+def _prioritize_proposed_insights(insights):
+    """Proposed-insight ids, github-issue-derived ones (source: "github#<n>",
+    SPEC §12.1) first, alphabetical within each group. A mirrored issue is a
+    confirmed, real user-reported problem; Explorer's own finds are
+    speculative by comparison, so once an issue-derived insight exists it
+    should reach the Architect's verdict queue ahead of self-generated ones
+    -- the mirror previously synced for over a dozen cycles in this
+    workspace before anything actually consumed it."""
+    proposed = [i for i, v in insights.items() if v.get("status") == "proposed"]
+    return sorted(proposed,
+                  key=lambda i: (not str(insights[i].get("source") or "").startswith("github#"), i))
+
+
 def build_single_session_prompt(data):
     """Enumerate everything actionable across the whole pipeline in one shot
     (mirrors compute_dispatch's categories, but as one flat work list instead
     of one dispatch decision per persona)."""
     tasks = data.get("tasks", {})
     insights = data.get("insights", {})
-    proposed = sorted(i for i, v in insights.items() if v.get("status") == "proposed")
+    proposed = _prioritize_proposed_insights(insights)
     todo_tasks = sorted(t for t, v in tasks.items() if v["status"] == "todo")
     implemented = sorted(t for t, v in tasks.items() if v["status"] == "implemented")
     approved = sorted(t for t, v in tasks.items() if v["status"] == "approved_by_architect")
@@ -518,7 +531,7 @@ def build_hybrid_session_prompt(data):
     the implementer is never also the reviewer."""
     tasks = data.get("tasks", {})
     insights = data.get("insights", {})
-    proposed = sorted(i for i, v in insights.items() if v.get("status") == "proposed")
+    proposed = _prioritize_proposed_insights(insights)
     todo_tasks = sorted(t for t, v in tasks.items() if v["status"] == "todo")
     qa_passed = sorted(t for t, v in tasks.items() if v["status"] == "qa_passed")
 
@@ -1122,7 +1135,7 @@ def compute_dispatch(data, running, cfg):
     tasks = data.get("tasks", {})
     insights = data.get("insights", {})
 
-    proposed = sorted(i for i, v in insights.items() if v.get("status") == "proposed")
+    proposed = _prioritize_proposed_insights(insights)
     implemented = sorted(t for t, v in tasks.items() if v["status"] == "implemented")
     approved = sorted(t for t, v in tasks.items() if v["status"] == "approved_by_architect")
     qa_passed = sorted(t for t, v in tasks.items() if v["status"] == "qa_passed")

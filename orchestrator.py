@@ -340,6 +340,11 @@ class Run:
         self.stdout_lines = []
         self.last_activity = None
         self.reader_thread = None
+        # Populated by _drain_stderr() -- see its docstring for why this
+        # exists at all (a chatty child can block on a full stderr pipe
+        # exactly like stdout could before _drain_stdout existed).
+        self.stderr_lines = []
+        self.stderr_thread = None
 
 
 def _activity_line_from_event(line):
@@ -401,10 +406,30 @@ def _drain_stdout(proc, run):
     proc.stdout.close()
 
 
+def _drain_stderr(proc, run):
+    """Continuously read stderr into run.stderr_lines. stdout needed a
+    background drainer (_drain_stdout) once spawns switched to stream-json,
+    which writes incrementally throughout execution -- but stderr was NEVER
+    drained during execution, under either output format: the old
+    communicate()-based reap() only ever read it in one shot, after the
+    process had already exited. A child that writes enough to stderr while
+    still running (debug output, a warning storm) fills the OS pipe buffer
+    (~64KB on Linux) and blocks on the next write -- confirmed by
+    reproduction: a test child writing 256KB to stderr with nothing reading
+    it hung indefinitely instead of exiting. Same fix as stdout: drain
+    continuously in a background thread instead of reading once at the end."""
+    for line in iter(proc.stderr.readline, ""):
+        run.stderr_lines.append(line.rstrip("\n"))
+    proc.stderr.close()
+
+
 def _start_reader(run):
     t = threading.Thread(target=_drain_stdout, args=(run.proc, run), daemon=True)
     t.start()
     run.reader_thread = t
+    t2 = threading.Thread(target=_drain_stderr, args=(run.proc, run), daemon=True)
+    t2.start()
+    run.stderr_thread = t2
 
 
 def _final_result_payload(run):
@@ -1182,15 +1207,16 @@ def reap(running, lease_minutes, data=None, cfg=None):
             else:
                 still.append(run)
                 continue
-        # Stdout is drained continuously by the background reader thread
-        # (_start_reader), not read here — a single final communicate() would
-        # race that thread and, since stream-json writes incrementally, may
-        # have already been partly consumed by it. Just wait for the thread
-        # to finish (it terminates on its own once the closed pipe EOFs,
-        # which happens at or right after process exit) and read stderr,
-        # which our thread never touches.
+        # Both stdout and stderr are drained continuously by background
+        # threads (_start_reader), not read here — a final communicate()/
+        # read() would race those threads and, since output can arrive
+        # throughout execution, may already have been partly consumed by
+        # them. Just wait for both to finish (they terminate on their own
+        # once their respective pipe EOFs, which happens at or right after
+        # process exit).
         run.reader_thread.join(timeout=5)
-        err = run.proc.stderr.read() if run.proc.stderr else ""
+        run.stderr_thread.join(timeout=5)
+        err = "\n".join(run.stderr_lines)
         payload = _final_result_payload(run)
         run.cost_label = resolve_developer_cost_label(run)
         rate_info = _extract_rate_limit_info(run)

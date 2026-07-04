@@ -1,4 +1,4 @@
-# Multi-Agent Framework Specification v2.19
+# Multi-Agent Framework Specification v2.20
 
 Autonomous, parallel, cost-bounded optimization of a target GitHub repository by
 specialized AI personas, coordinated exclusively through file-based artifacts and
@@ -101,6 +101,12 @@ a lock-gated state register.
 | # | Change | Rationale |
 |---|--------|-----------|
 | 33 | New `execution_mode` value `hybrid`: Explorer / Architect Mode A (verdicts + task decomposition) / Developer / Documenter share one `single_session`-style process, but Architect Mode B (diff review) and QA ALWAYS spawn as separate fresh processes with their own models (`compute_hybrid_review_dispatch`, reusing `spawn()` exactly as `multi_process` does) | `single_session` amortizes spawn overhead well (SPEC §7.9, change 29) but has a structural self-review problem: the same context that authors a task's code can also be the one that approves it via Architect Mode B / QA, with only a prompt instruction ("QA review must still be genuine, not a rubber stamp") standing against confirmation bias — and the only archive-safety incident this framework has had (change 30) happened during a `single_session` run. `hybrid` keeps the session/cache savings for authorship-side roles while guaranteeing the reviewer is a fresh process that never saw the implementation happen |
+
+## Changelog from v2.19 (v2.20)
+
+| # | Change | Rationale |
+|---|--------|-----------|
+| 41 | `_session_per_task_costs()`: `single_session`/`hybrid_session` runs now split their billed tokens/USD across the tasks they actually touched instead of lumping everything into `single_session_cycle`/`hybrid_session_cycle`. Each distinct assistant message (deduped by message id) carries per-turn `usage` and a local receive timestamp; bucketed against whichever task this agent had most recently `claim`-ed as of that time (using `task`-tagged log entries, change 36). `reap()` calls `record_cost` once per bucket, splitting `cost_usd` proportionally to each bucket's token share. Also: `_drain_stdout`/`_drain_stderr` now catch and log unexpected exceptions instead of dying silently (found while adding this: a background thread's exception doesn't propagate to the main thread or fail the process, so a fake test double missing a newly-added `Run` field crashed the reader thread invisibly, leaving the test's exit code green) | `resolve_developer_cost_label` (change 4) only covers `multi_process`'s "one spawn, one developer claim" case; `single_session`/`hybrid` -- the two modes this framework recommends for subscription use -- still zeroed out per-task cost tracking (`top_per_task`) for any task they touched, structurally harder to fix since one process can touch many tasks. Token-level attribution is approximate by nature (local receive-time is a proxy for when the API actually processed each turn, and a handful of system/thinking-only events carry no usage of their own) but is a real improvement over "no attribution at all" |
 
 ## Changelog from v2.18 (v2.19)
 
@@ -469,9 +475,21 @@ Uniform exit-code semantics:
 - The orchestrator records cost mechanically after each persona run via
   `hub.py record-cost --task <id> --tokens <n> [--usd <float>]`.
   Explorer records against pseudo-task `explorer_cycle`; Architect against
-  `architect_cycle`; Developers against `developer_run`.
+  `architect_cycle`; multi_process Developers against the task id they
+  actually claimed, resolved post-hoc (`resolve_developer_cost_label`,
+  change 4; falls back to `developer_run` if the spawn never claimed
+  anything). `single_session`/`hybrid_session` split across every task they
+  touch (`_session_per_task_costs`, change 41), falling back to
+  `single_session_cycle`/`hybrid_session_cycle` for turns before any claim.
 - `system_settings.daily_token_budget` (config) is a hard ceiling enforced by
   the orchestrator (§7.4). The budget comparison always uses **tokens** (not USD).
+- **Known gap**: `record-cost`'s per-task split (above) updates
+  `usage.per_task`/`usage.per_day`, which `top_per_task` and `budget` read
+  directly -- those are accurate for all modes. `runs.jsonl` (below) still
+  logs ONE line per actual process spawn with that spawn's own generic
+  `cost_label`, since it's an audit trail of spawns, not of tasks;
+  `effectiveness.rework_usd`, which filters `runs.jsonl` by `cost_label`,
+  therefore still cannot see per-task session spend even after change 41.
 
 ### Adaptive session pacing (opt-in, change 38)
 

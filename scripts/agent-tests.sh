@@ -311,14 +311,13 @@ print("CHILD-DONE")
 """
 _proc = _sp.Popen(["python3", "-c", _child], stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
 
-class _StderrTestRun:
-    def __init__(self, proc):
-        self.proc, self.persona, self.agent_id, self.cost_label, self.model = proc, "t", "t-1", "c", "m"
-        self.started = _time.time()
-        self.stdout_lines, self.last_activity, self.reader_thread = [], None, None
-        self.stderr_lines, self.stderr_thread = [], None
-
-_run = _StderrTestRun(_proc)
+# Use the real Run class, not a hand-rolled duplicate -- a fake with its own
+# field list silently drifts from Run's real attributes (this happened: an
+# earlier version of this test predated `stream_events` and crashed
+# _drain_stdout in its background thread the moment that field was added,
+# invisibly, since a thread's exception doesn't fail the main thread or this
+# test's exit code).
+_run = o.Run("t", "t-1", "c", _proc, _time.time(), "m")
 o._start_reader(_run)
 _deadline = _time.time() + 8
 while _time.time() < _deadline and _proc.poll() is None:
@@ -330,6 +329,44 @@ _run.reader_thread.join(timeout=5)
 _run.stderr_thread.join(timeout=5)
 assert _run.stdout_lines == ["CHILD-DONE"], f"stdout capture broke, got {_run.stdout_lines}"
 assert len(_run.stderr_lines) == 4096, f"expected 4096 drained stderr lines, got {len(_run.stderr_lines)}"
+
+# _session_per_task_costs: single_session/hybrid_session must split tokens
+# across the tasks they actually touched (using claim events tagged with
+# `task`, change 36), not lump everything into the generic session
+# cost_label -- and must dedupe repeated content blocks from the same
+# assistant message id, and never leak another agent's claims into this
+# run's bucketing.
+class _CostRun:
+    def __init__(self):
+        self.agent_id, self.cost_label, self.stream_events = "hybrid-1-a", "hybrid_session_cycle", []
+
+def _msg_event(recv_ts, mid, in_t, out_t):
+    return (recv_ts, {"type": "assistant", "message": {"id": mid,
+            "usage": {"input_tokens": in_t, "output_tokens": out_t, "cache_creation_input_tokens": 0}}})
+
+_cost_run = _CostRun()
+_base = _time.time() - 1000
+_cost_data = {"log": [
+    {"ts": _ts(-990), "agent": "hybrid-1-a", "action": "claim", "task": "task_A"},
+    {"ts": _ts(-500), "agent": "hybrid-1-a", "action": "claim", "task": "task_B"},
+    {"ts": _ts(-995), "agent": "OTHER-AGENT", "action": "claim", "task": "task_ignored"},
+]}
+_cost_run.stream_events = [
+    _msg_event(_base - 50, "msg_pre", 100, 50),      # before any claim -> generic cost_label
+    _msg_event(_base + 100, "msg_a1", 200, 100),      # task_A window
+    _msg_event(_base + 200, "msg_a2", 300, 150),      # task_A window
+    (_base + 200.1, {"type": "assistant", "message": {"id": "msg_a2",  # duplicate content block, same id
+        "usage": {"input_tokens": 300, "output_tokens": 150, "cache_creation_input_tokens": 0}}}),
+    _msg_event(_base + 600, "msg_b1", 400, 200),      # task_B window
+    (_base + 700, {"type": "result", "subtype": "success"}),  # non-assistant, ignored
+    (_base + 710, None),  # unparsed line, ignored without crashing
+]
+buckets = o._session_per_task_costs(_cost_run, _cost_data)
+assert buckets["hybrid_session_cycle"]["tokens"] == 150, \
+    f"pre-claim overhead must fall back to the generic cost_label, got {buckets}"
+assert buckets["task_A"]["tokens"] == 750, f"task_A must be 750 (deduped msg_a2), got {buckets}"
+assert buckets["task_B"]["tokens"] == 600, f"task_B must be 600, got {buckets}"
+assert "task_ignored" not in buckets, "a claim by a DIFFERENT agent must never leak into this run's bucketing"
 
 print("orchestrator.py checks OK")
 PYEOF

@@ -33,6 +33,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FRAMEWORK = os.path.normpath(os.path.join(HERE, ".."))
 WORKSPACE = os.path.dirname(FRAMEWORK)
 PRODUCT = os.environ.get("AGENT_PRODUCT_DIR") or os.path.join(WORKSPACE, "product-repo")
+WORKTREES = os.environ.get("AGENT_WORKTREES_DIR") or os.path.join(WORKSPACE, "worktrees")
 HUB = os.environ.get("AGENT_HUB_DIR") or os.path.join(FRAMEWORK, "agent-hub")
 STATUS = os.path.join(HUB, "status.json")
 LOCKFILE = os.path.join(HUB, "status.lock")
@@ -158,8 +159,25 @@ def sweep_expired_leases(data, agent_id):
             _return_to_todo(data, agent_id, tid, t, "lease-expired")
 
 
+def _cleanup_worktree(tid):
+    """Remove worktrees/task-{id} left behind by a killed/expired/rejected
+    claim. Without this, a later claimant's `git -C product-repo worktree add
+    ../worktrees/task-{id} -b task-{id}` collides with the stale one (both
+    the directory and git's internal worktree registration under
+    product-repo/.git/worktrees/) and fails outright. Best-effort: any
+    failure (no product-repo, nothing registered, git unavailable) is
+    silently ignored -- this is housekeeping, not a correctness gate."""
+    branch = f"task-{tid.removeprefix('task_')}"
+    path = os.path.join(WORKTREES, branch)
+    if not os.path.isdir(PRODUCT) or not os.path.exists(path):
+        return
+    subprocess.run(["git", "-C", PRODUCT, "worktree", "remove", "--force", path],
+                   capture_output=True)
+
+
 def _return_to_todo(data, agent_id, tid, t, reason):
     """attempts += 1; land in todo, or blocked once max_attempts is hit."""
+    _cleanup_worktree(tid)
     t["attempts"] = t.get("attempts", 0) + 1
     t["assignee"] = None
     t["lease_expires_at"] = None
@@ -350,6 +368,7 @@ def cmd_release_task(args):
         if t is None or t["status"] != "in_progress":
             print(f"task {args.task} is not in_progress", file=sys.stderr)
             return 1
+        _cleanup_worktree(args.task)
         t["status"] = "todo"
         t["assignee"] = None
         t["lease_expires_at"] = None

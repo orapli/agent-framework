@@ -1225,47 +1225,23 @@ def resolve_developer_cost_label(run):
     return run.cost_label
 
 
-def _session_per_task_costs(run, data):
-    """single_session/hybrid_session play multiple persona roles across
-    potentially several tasks in one process, so resolve_developer_cost_label
-    (which only handles multi_process's "one spawn, one developer claim"
-    case) doesn't apply -- everything lands on the generic
-    single_session_cycle/hybrid_session_cycle pseudo-task, silently zeroing
-    out per-task cost tracking for these two modes exactly the way
-    developer_run did before change 4, just structurally harder to fix
-    since one process can touch many tasks over its lifetime.
+def _bucket_message_tokens(run, task_for):
+    """Shared core of _session_per_task_costs and _transition_bucketed_costs:
+    each distinct assistant message (deduped by message id -- content
+    blocks belonging to the same API turn, e.g. a thinking block and the
+    text/tool_use that follows it, repeat the same `usage`) carries its own
+    per-turn token usage and a local receive timestamp (when our reader
+    thread saw the line -- not the API's own clock, but close enough for
+    attribution since it's only local pipe-read delay). Bucket each
+    message's tokens via `task_for(receive_ts)`, a callback the two callers
+    supply with different boundary semantics (claim opens a window;
+    transition closes one).
 
-    Approach: each distinct assistant message (deduped by message id --
-    content blocks belonging to the same API turn, e.g. a thinking block
-    and the text/tool_use that follows it, repeat the same `usage`) carries
-    its own per-turn token usage and a local receive timestamp (when our
-    reader thread saw the line -- not the API's own clock, but close enough
-    for attribution since it's only local pipe-read delay). Bucket each
-    message's tokens against whichever task this agent had most recently
-    `claim`-ed as of that receive time, using log entries tagged with
-    `task` (change 36). Turns before any claim (insight verdicts, initial
-    exploration) fall back to the run's own generic cost_label.
-
-    Returns {task_id_or_cost_label: {"tokens": n}}, never empty. Token sum
-    approximates but does not necessarily exactly equal tokens_from_result's
-    total for the same run -- a handful of system/thinking-only events
-    carry no usage of their own and contribute nothing to any bucket."""
-    claims = sorted(
-        (e for e in data.get("log", [])
-         if e.get("agent") == run.agent_id and e.get("action") == "claim" and e.get("task")),
-        key=lambda e: e["ts"]
-    )
-    claim_times = [(_iso_to_epoch(e["ts"]), e["task"]) for e in claims]
-
-    def task_for(ts):
-        current = None
-        for claim_ts, tid in claim_times:
-            if claim_ts <= ts:
-                current = tid
-            else:
-                break
-        return current or run.cost_label
-
+    Returns {bucket: {"tokens": n}}, possibly empty -- callers decide their
+    own empty-bucket fallback. Token sum approximates but does not
+    necessarily exactly equal tokens_from_result's total for the same run:
+    a handful of system/thinking-only events carry no usage of their own
+    and contribute nothing to any bucket."""
     seen_ids = set()
     buckets = {}
     for recv_ts, parsed in run.stream_events:
@@ -1283,9 +1259,94 @@ def _session_per_task_costs(run, data):
             continue
         bucket = task_for(recv_ts)
         buckets.setdefault(bucket, {"tokens": 0})["tokens"] += tokens
+    return buckets
+
+
+def _record_bucketed_cost(buckets, cost_usd, agent_id):
+    """Call record_cost once per bucket, splitting cost_usd proportionally
+    to each bucket's share of the total bucketed tokens."""
+    total_bucketed = sum(b["tokens"] for b in buckets.values()) or 1
+    for bucket_label, b in buckets.items():
+        record_cost(bucket_label, b["tokens"], agent_id,
+                     usd=round(cost_usd * (b["tokens"] / total_bucketed), 6))
+
+
+def _session_per_task_costs(run, data):
+    """single_session/hybrid_session play multiple persona roles across
+    potentially several tasks in one process, so resolve_developer_cost_label
+    (which only handles multi_process's "one spawn, one developer claim"
+    case) doesn't apply -- everything lands on the generic
+    single_session_cycle/hybrid_session_cycle pseudo-task, silently zeroing
+    out per-task cost tracking for these two modes exactly the way
+    developer_run did before change 4, just structurally harder to fix
+    since one process can touch many tasks over its lifetime.
+
+    Bucket each message's tokens (_bucket_message_tokens) against whichever
+    task this agent had most recently `claim`-ed as of that receive time,
+    using log entries tagged with `task` (change 36) -- claim OPENS a
+    task's working window. Turns before any claim (insight verdicts,
+    initial exploration) fall back to the run's own generic cost_label.
+
+    Returns {task_id_or_cost_label: {"tokens": n}}, never empty."""
+    claims = sorted(
+        (e for e in data.get("log", [])
+         if e.get("agent") == run.agent_id and e.get("action") == "claim" and e.get("task")),
+        key=lambda e: e["ts"]
+    )
+    claim_times = [(_iso_to_epoch(e["ts"]), e["task"]) for e in claims]
+
+    def task_for(ts):
+        current = None
+        for claim_ts, tid in claim_times:
+            if claim_ts <= ts:
+                current = tid
+            else:
+                break
+        return current or run.cost_label
+
+    buckets = _bucket_message_tokens(run, task_for)
     if not buckets:
         buckets[run.cost_label] = {"tokens": 0}
     return buckets
+
+
+def _transition_bucketed_costs(run, data):
+    """A single QA/Documenter spawn can batch-review several tasks at once
+    (compute_dispatch/compute_hybrid_review_dispatch dispatch "verify tasks
+    awaiting QA: A, B, C" or "finalize docs for: A, B, C" as ONE spawn), but
+    the spawn's own cost_label is hardcoded to just the first task
+    (`approved[0]`/`qa_passed[0]`) -- every token of a 3-task batch landed
+    on task A alone, none on B or C. Same misattribution class
+    resolve_developer_cost_label (change 4) fixed for Developer and
+    _session_per_task_costs (change 41) fixed for single_session/hybrid,
+    now closed for direct multi_process QA/Documenter batches too.
+
+    Unlike claim (which OPENS a task's window), a task-scoped transition
+    CLOSES one: "review A, transition A, review B, transition B" means
+    tokens up to and including transition A's receive time belong to A,
+    tokens between transition A and B belong to B. Tokens after the LAST
+    transition (wrap-up chatter) fall back to the run's own cost_label.
+
+    Returns {task_id_or_cost_label: {"tokens": n}}, or None if this agent
+    made no task-scoped transitions at all (caller falls back to the plain
+    single-label record_cost in that case -- e.g. a QA run that found
+    nothing to verify and made no transitions)."""
+    transitions = sorted(
+        (e for e in data.get("log", [])
+         if e.get("agent") == run.agent_id and e.get("task") and "->" in e.get("action", "")),
+        key=lambda e: e["ts"]
+    )
+    if not transitions:
+        return None
+    boundaries = [(_iso_to_epoch(e["ts"]), e["task"]) for e in transitions]
+
+    def task_for(ts):
+        for boundary_ts, tid in boundaries:
+            if ts <= boundary_ts:
+                return tid
+        return run.cost_label
+
+    return _bucket_message_tokens(run, task_for) or None
 
 
 def reap(running, lease_minutes, data=None, cfg=None):
@@ -1320,12 +1381,13 @@ def reap(running, lease_minutes, data=None, cfg=None):
         if payload:
             tokens = tokens_from_result(payload)
             cost_usd = cost_usd_from_result(payload)
+            buckets = None
             if run.persona in ("single_session", "hybrid_session") and data is not None:
                 buckets = _session_per_task_costs(run, data)
-                total_bucketed = sum(b["tokens"] for b in buckets.values()) or 1
-                for bucket_label, b in buckets.items():
-                    record_cost(bucket_label, b["tokens"], run.agent_id,
-                                usd=round(cost_usd * (b["tokens"] / total_bucketed), 6))
+            elif run.persona in ("qa_tester", "documenter") and data is not None:
+                buckets = _transition_bucketed_costs(run, data)
+            if buckets:
+                _record_bucketed_cost(buckets, cost_usd, run.agent_id)
                 if len(buckets) > 1 or next(iter(buckets)) != run.cost_label:
                     log(f"{run.persona} cost split across {len(buckets)} task(s): "
                         + ", ".join(f"{k}={v['tokens']}tok" for k, v in buckets.items()))

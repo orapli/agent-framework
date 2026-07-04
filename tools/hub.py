@@ -132,6 +132,33 @@ def migrate(data):
     return data
 
 
+def _trim_log(log, tasks, cap):
+    """Cap `log` to at most `cap` entries like a plain sliding window,
+    EXCEPT entries tagged with a task id that is still active (present in
+    `tasks`, i.e. not yet archived) are never evicted. Without this, a
+    long-lived task's own timeline (the dashboard's per-task Gantt bar,
+    change 36/40, built by filtering `log` for that task's entries) can
+    silently lose its early segments once enough OTHER log activity pushes
+    them past a plain last-N-entries window -- the bar would just start
+    wherever the surviving log happens to begin, understating how long the
+    task actually spent in its early phases.
+
+    Evictable entries (not task-scoped, or scoped to an already-archived
+    task) are still capped to the most recent `cap` among themselves, so
+    status.json stays bounded during normal long-running operation. If
+    every active task's own history already exceeds `cap`, the log can
+    temporarily exceed it -- unavoidable without discarding the very
+    history this exists to protect, and self-correcting as tasks complete
+    and archive (their entries become evictable again)."""
+    if len(log) <= cap:
+        return log
+    protected = [e for e in log if e.get("task") and e["task"] in tasks]
+    evictable = [e for e in log if not (e.get("task") and e["task"] in tasks)]
+    merged = protected + evictable[-cap:]
+    merged.sort(key=lambda e: e["ts"])
+    return merged
+
+
 def save_status(data):
     tmp = STATUS + ".tmp"
     cap = 500
@@ -139,7 +166,7 @@ def save_status(data):
         cap = int(load_config()["system_settings"].get("log_max_entries", 500))
     except Exception:
         pass
-    data["log"] = data["log"][-cap:]
+    data["log"] = _trim_log(data["log"], data.get("tasks", {}), cap)
     with open(tmp, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")

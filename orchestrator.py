@@ -920,6 +920,12 @@ def main():
                 while running:
                     time.sleep(5)
                     running = reap(running, lease_min, data=data, cfg=cfg)
+                    # reap() only rewrites the dashboard when a run finishes,
+                    # so a single long-lived process (single_session, or any
+                    # slow spawn) left elapsed_s frozen for the whole wait —
+                    # refresh unconditionally on every 5s tick too.
+                    if running:
+                        _write_dashboard_state(data, running, cfg)
                 data = migrate(load_json(STATUS, {}))
                 _, spent, budget = budget_exhausted(data, cfg)
                 write_cycle_status(data, [], spent, budget)

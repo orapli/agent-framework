@@ -283,10 +283,17 @@ def _prioritize_proposed_insights(insights):
                   key=lambda i: (not str(insights[i].get("source") or "").startswith("github#"), i))
 
 
-def build_single_session_prompt(data):
+def build_single_session_prompt(data, cfg):
     """Enumerate everything actionable across the whole pipeline in one shot
     (mirrors compute_dispatch's categories, but as one flat work list instead
-    of one dispatch decision per persona)."""
+    of one dispatch decision per persona). Returns None when there is
+    nothing pending AND the Explorer circuit breaker (explorer_breaker_tripped)
+    is tripped -- signaling the caller to skip spawning entirely rather than
+    burning a whole session's fixed overhead just to tell it to do nothing.
+    Before this, explorer_breaker_tripped was only ever consulted by
+    multi_process's compute_dispatch -- single_session and hybrid, the
+    modes this framework actually recommends for subscription/cost-
+    conscious operation, ignored it and kept auto-exploring unconditionally."""
     tasks = data.get("tasks", {})
     insights = data.get("insights", {})
     proposed = _prioritize_proposed_insights(insights)
@@ -311,6 +318,8 @@ def build_single_session_prompt(data):
         lines.append(f"5. As Developer: implement todo tasks (claim one at a time via "
                      f"`hub.py claim-task --persona developer`): {', '.join(todo_tasks)}")
     if not any([proposed, implemented, approved, qa_passed, todo_tasks]):
+        if explorer_breaker_tripped(cfg):
+            return None
         lines.append("Nothing is pending. As Explorer: explore ../product-repo for new "
                      "insights per your persona definition. Register at most 3, then stop.")
     return "\n".join(lines)
@@ -453,7 +462,12 @@ def spawn_single_session(data, cfg, dry_run):
     model = cfg["system_settings"].get("single_session_model") \
         or cfg["persona_model_mapping"]["developer"]["model"]
     agent_id = f"single-{int(time.time()) % 100000}-{os.urandom(2).hex()}"
-    prompt = build_single_session_prompt(data)
+    prompt = build_single_session_prompt(data, cfg)
+    if prompt is None:
+        if dry_run:
+            log("DRY-RUN would NOT spawn single_session (nothing pending, "
+                "Explorer circuit breaker tripped)")
+        return None
     if dry_run:
         log(f"DRY-RUN would spawn single_session (model={model}):\n{prompt}")
         return None
@@ -525,11 +539,14 @@ def build_hybrid_session_system_prompt(agent_id):
     return "\n".join(parts)
 
 
-def build_hybrid_session_prompt(data):
+def build_hybrid_session_prompt(data, cfg):
     """Like build_single_session_prompt, but the queue omits Architect Mode B
     (implemented-task review) and QA (approved-task verification) — those are
     dispatched separately by compute_hybrid_review_dispatch on purpose, so
-    the implementer is never also the reviewer."""
+    the implementer is never also the reviewer. Returns None when there is
+    nothing pending AND the Explorer circuit breaker is tripped -- see
+    build_single_session_prompt for why this matters for hybrid specifically
+    (it's one of the two recommended subscription-friendly modes)."""
     tasks = data.get("tasks", {})
     insights = data.get("insights", {})
     proposed = _prioritize_proposed_insights(insights)
@@ -547,6 +564,8 @@ def build_hybrid_session_prompt(data):
         lines.append(f"3. As Developer: implement todo tasks (claim one at a time via "
                      f"`hub.py claim-task --persona developer`): {', '.join(todo_tasks)}")
     if not any([proposed, qa_passed, todo_tasks]):
+        if explorer_breaker_tripped(cfg):
+            return None
         lines.append("Nothing pending for this session. As Explorer: explore "
                      "../product-repo for new insights per your persona definition. "
                      "Register at most 3, then stop.")
@@ -561,7 +580,12 @@ def spawn_hybrid_session(data, cfg, dry_run):
     model = cfg["system_settings"].get("single_session_model") \
         or cfg["persona_model_mapping"]["developer"]["model"]
     agent_id = f"hybrid-{int(time.time()) % 100000}-{os.urandom(2).hex()}"
-    prompt = build_hybrid_session_prompt(data)
+    prompt = build_hybrid_session_prompt(data, cfg)
+    if prompt is None:
+        if dry_run:
+            log("DRY-RUN would NOT spawn hybrid_session (nothing pending, "
+                "Explorer circuit breaker tripped)")
+        return None
     if dry_run:
         log(f"DRY-RUN would spawn hybrid_session (model={model}):\n{prompt}")
         return None

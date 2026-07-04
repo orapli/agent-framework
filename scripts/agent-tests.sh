@@ -216,7 +216,7 @@ architect_item = next(i for i in review_dispatch if i[0] == "architect")
 assert architect_item[3] == "architect_review", \
     f"Mode B review must use the architect_review model key, got {architect_item[3]}"
 
-hybrid_prompt = o.build_hybrid_session_prompt(data)
+hybrid_prompt = o.build_hybrid_session_prompt(data, cfg2)
 assert "task_001" not in hybrid_prompt, "hybrid session must NOT queue the implemented task itself"
 assert "task_002" not in hybrid_prompt, "hybrid session must NOT queue the approved task itself"
 assert "insight_a" in hybrid_prompt and "task_003" in hybrid_prompt, \
@@ -276,6 +276,26 @@ class _FakeRun:
 info = o._extract_rate_limit_info(_FakeRun())
 assert info == {"status": "allowed", "resetsAt": 1783174200, "rateLimitType": "five_hour"}, \
     f"must extract the rate_limit_info dict from the last matching stream-json line, got {info}"
+
+# The Explorer circuit breaker must also gate single_session/hybrid's own
+# empty-backlog fallback, not just multi_process's compute_dispatch -- both
+# are the modes this framework actually recommends for subscription use, so
+# a breaker that only covers multi_process protects the wrong mode.
+empty_data = {"insights": {}, "tasks": {}}
+cfg3 = {"system_settings": {}, "persona_model_mapping": {"developer": {"model": "m"}}}
+with open(o.INSIGHT_INDEX, "w") as f:
+    json.dump([{"verdict": "rejected"}] * 9 + [{"verdict": "accepted"}], f)  # 10%, trips
+assert o.build_single_session_prompt(empty_data, cfg3) is None, \
+    "single_session must return None (skip spawning) when backlog is empty and the breaker is tripped"
+assert o.build_hybrid_session_prompt(empty_data, cfg3) is None, \
+    "hybrid session must return None (skip spawning) when backlog is empty and the breaker is tripped"
+
+with open(o.INSIGHT_INDEX, "w") as f:
+    json.dump([], f)  # no history -- breaker must NOT trip, normal Explorer fallback applies
+assert o.build_single_session_prompt(empty_data, cfg3) is not None, \
+    "single_session must still fall back to exploring when there is no acceptance history yet"
+assert o.build_hybrid_session_prompt(empty_data, cfg3) is not None, \
+    "hybrid session must still fall back to exploring when there is no acceptance history yet"
 
 print("orchestrator.py checks OK")
 PYEOF

@@ -1,4 +1,4 @@
-# Multi-Agent Framework Specification v2.17
+# Multi-Agent Framework Specification v2.18
 
 Autonomous, parallel, cost-bounded optimization of a target GitHub repository by
 specialized AI personas, coordinated exclusively through file-based artifacts and
@@ -101,6 +101,12 @@ a lock-gated state register.
 | # | Change | Rationale |
 |---|--------|-----------|
 | 33 | New `execution_mode` value `hybrid`: Explorer / Architect Mode A (verdicts + task decomposition) / Developer / Documenter share one `single_session`-style process, but Architect Mode B (diff review) and QA ALWAYS spawn as separate fresh processes with their own models (`compute_hybrid_review_dispatch`, reusing `spawn()` exactly as `multi_process` does) | `single_session` amortizes spawn overhead well (SPEC §7.9, change 29) but has a structural self-review problem: the same context that authors a task's code can also be the one that approves it via Architect Mode B / QA, with only a prompt instruction ("QA review must still be genuine, not a rubber stamp") standing against confirmation bias — and the only archive-safety incident this framework has had (change 30) happened during a `single_session` run. `hybrid` keeps the session/cache savings for authorship-side roles while guaranteeing the reviewer is a fresh process that never saw the implementation happen |
+
+## Changelog from v2.17 (v2.18)
+
+| # | Change | Rationale |
+|---|--------|-----------|
+| 39 | `explorer_breaker_tripped` (change 5) is now consulted by `build_single_session_prompt`/`build_hybrid_session_prompt` as well as `compute_dispatch` -- both return `None` when the backlog is empty and the breaker is tripped, and `spawn_single_session`/`spawn_hybrid_session` skip spawning entirely (rather than spawning a whole session's fixed overhead just to instruct it to do nothing) | Independent review found the breaker was wired into only one of the three dispatch paths -- `compute_dispatch` (`multi_process`). `single_session` and `hybrid`, the two modes this framework actually recommends for subscription/cost-conscious operation (§7.9), ignored it and kept auto-exploring on every empty-backlog cycle regardless of recent acceptance rate -- protecting the mode least likely to be in active use while leaving the recommended ones exposed |
 
 ## Changelog from v2.16 (v2.17)
 

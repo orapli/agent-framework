@@ -21,3 +21,4 @@ agent-hub/dashboard/
 agent-hub/backup-*/
 agent-hub/.limit-cooldown
 agent-hub/.pending-resumes
+agent-hub/.running-registry.json

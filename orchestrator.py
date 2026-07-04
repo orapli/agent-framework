@@ -82,6 +82,7 @@ CYCLE_STATUS = os.path.join(HUB, "cycle-status.md")
 HUB_PY = os.path.join(HERE, "tools", "hub.py")
 COOLDOWN_FILE = os.path.join(HUB, ".limit-cooldown")
 RESUMES_FILE = os.path.join(HUB, ".pending-resumes")
+RUNNING_REGISTRY = os.path.join(HUB, ".running-registry.json")
 INSIGHT_INDEX = os.path.join(HUB, "01_insights", "index.json")
 DASHBOARD = os.path.join(HUB, "dashboard")
 RUNS_JSONL = os.path.join(DASHBOARD, "runs.jsonl")
@@ -659,6 +660,94 @@ def _release_claims_of(agent_id):
             log(f"released {tid} (was claimed by {agent_id})")
 
 
+def _save_running_registry(running, orphans):
+    """Persist enough about every currently-tracked process (both ones this
+    orchestrator process spawned and orphans inherited from a prior one) to
+    detect them again after an orchestrator crash/restart. `running`'s
+    entries are real Run objects; `orphans`' are already plain dicts."""
+    entries = [{"pid": r.proc.pid, "persona": r.persona, "agent_id": r.agent_id,
+                "cost_label": r.cost_label, "model": r.model, "started_at": r.started}
+               for r in running] + list(orphans)
+    tmp = RUNNING_REGISTRY + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(entries, f, indent=2)
+    os.replace(tmp, RUNNING_REGISTRY)
+
+
+def _pid_alive(pid):
+    """os.kill(pid, 0) alone risks a false positive after a full restart: if
+    PIDs wrapped around, an unrelated process could coincidentally reuse a
+    recorded orphan's PID. Where /proc is available (Linux), cross-check the
+    command line actually looks like one of our `claude` spawns before
+    trusting it. Falls back to trusting os.kill alone where /proc isn't
+    available (e.g. macOS) or is unreadable (permission, race)."""
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+    cmdline_path = f"/proc/{pid}/cmdline"
+    if not os.path.exists(cmdline_path):
+        return True
+    try:
+        with open(cmdline_path, "rb") as f:
+            argv = f.read().decode(errors="replace").split("\x00")
+        return any("claude" in a for a in argv)
+    except Exception:
+        return True
+
+
+def reconcile_orphans_from_previous_run():
+    """Called once at orchestrator startup, before the poll loop. A prior
+    orchestrator process may have died (crash, kill -9) while personas it
+    spawned via subprocess.Popen(stdout=PIPE) were still running. Those
+    children are now orphaned and NOT meaningfully recoverable: they were
+    re-parented to init (or a subreaper) on the old orchestrator's death, so
+    this process cannot waitpid() them for an exit status (only a real
+    parent can); and their stdout pipe's read end was held exclusively by
+    the dead orchestrator, so it's now broken — any further write attempt
+    fails, which will kill or corrupt the child's own execution before long
+    even if it hasn't already. There is no live output to reattach to.
+
+    Best achievable behavior: track any orphan whose PID is still alive and
+    wait for it to disappear (checked every poll cycle by _reap_orphans)
+    before releasing its claimed task, since we cannot know whether it
+    happened to finish successfully before its pipe broke. Any orphan whose
+    PID is already gone is released immediately. Either way this reuses
+    _release_claims_of exactly like a session-limit death: no attempt is
+    burned, since the failure (if any) was infrastructure, not the work.
+    Non-developer personas hold no exclusive claim, so nothing to release
+    for those beyond logging."""
+    entries = load_json(RUNNING_REGISTRY, [])
+    if not entries:
+        return []
+    still_alive = []
+    for e in entries:
+        if _pid_alive(e["pid"]):
+            log(f"orphan from a previous orchestrator run still alive: {e['persona']} "
+                f"pid={e['pid']} ({e['cost_label']}) — its output pipe is broken (we are "
+                f"not its parent); waiting for it to exit before releasing its claim")
+            still_alive.append(e)
+        else:
+            log(f"orphan from a previous orchestrator run already gone: {e['persona']} "
+                f"pid={e['pid']} ({e['cost_label']}) — releasing its claim")
+            _release_claims_of(e["agent_id"])
+    return still_alive
+
+
+def _reap_orphans(orphans):
+    """Re-check liveness of tracked orphans once per poll cycle; release the
+    claim of any that have now disappeared."""
+    still = []
+    for e in orphans:
+        if _pid_alive(e["pid"]):
+            still.append(e)
+        else:
+            log(f"orphan process exited: {e['persona']} pid={e['pid']} "
+                f"({e['cost_label']}) — releasing its claim")
+            _release_claims_of(e["agent_id"])
+    return still
+
+
 def _renew_claims_of(agent_id):
     data = migrate(load_json(STATUS, {}))
     for tid, t in data.get("tasks", {}).items():
@@ -1177,12 +1266,15 @@ def main():
     issue_min = int(cfg["system_settings"].get("issue_sync_minutes", 60))
     lease_min = int(cfg["system_settings"].get("lease_minutes", 30))
     running = []
+    orphans = reconcile_orphans_from_previous_run()
     try:
         while True:
             pull_product_repo()
             sync_issue_mirror(issue_min)
+            orphans = _reap_orphans(orphans)
             data = migrate(load_json(STATUS, {}))
             running = reap(running, lease_min, data=data, cfg=cfg)
+            _save_running_registry(running, orphans)
             exhausted, spent, budget = budget_exhausted(data, cfg)
             cool = cooldown_remaining()
             max_spawns = int(cfg["system_settings"].get("max_concurrent_spawns", 2))
@@ -1251,12 +1343,14 @@ def main():
                                     model_key=model_key)
                         if run:
                             running.append(run)
+            _save_running_registry(running, orphans)
             write_cycle_status(data, running, spent, budget)
             _write_dashboard_state(data, running, cfg)
             if args.once or args.dry_run:
                 while running:
                     time.sleep(5)
                     running = reap(running, lease_min, data=data, cfg=cfg)
+                    _save_running_registry(running, orphans)
                     # reap() only rewrites the dashboard when a run finishes,
                     # so a single long-lived process (single_session, or any
                     # slow spawn) left elapsed_s frozen for the whole wait —
@@ -1275,6 +1369,7 @@ def main():
             while running:
                 time.sleep(5)
                 running = reap(running, lease_min, data=data, cfg=cfg)
+                _save_running_registry(running, orphans)
         except KeyboardInterrupt:
             pass
         return 0

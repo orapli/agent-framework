@@ -7,7 +7,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 command -v python3 >/dev/null 2>&1 || { echo "python3 not found" >&2; exit 2; }
 
-echo "== 1/4 syntax: compile all python + bash -n all shell scripts"
+echo "== 1/5 syntax: compile all python + bash -n all shell scripts"
 python3 -m compileall -q "$ROOT/tools" "$ROOT/orchestrator.py" || exit 1
 for sh in "$ROOT"/tools/*.sh "$ROOT"/scripts/*.sh; do
   bash -n "$sh" || exit 1
@@ -17,7 +17,7 @@ CLEANUP_PATHS=()
 cleanup() { rm -rf "${CLEANUP_PATHS[@]}"; }
 trap cleanup EXIT
 
-echo "== 2/4 hub.py smoke test against a scratch register"
+echo "== 2/5 hub.py smoke test against a scratch register"
 SC="$(mktemp -d)"
 CLEANUP_PATHS+=("$SC")
 mkdir -p "$SC/01_insights" "$SC/03_reports"
@@ -74,7 +74,7 @@ echo "--- archive without --force must refuse: no real product-repo to verify a 
 "${HUB[@]}" archive --task task_001 --force >/dev/null || fail "archive --force"
 grep -q "task_001" "$SC/digest.md" || fail "digest line"
 
-echo "== 3/4 usage shape migration and --usd accumulation"
+echo "== 3/5 usage shape migration and --usd accumulation"
 SC2="$(mktemp -d)"
 CLEANUP_PATHS+=("$SC2")
 mkdir -p "$SC2/01_insights" "$SC2/03_reports"
@@ -127,7 +127,7 @@ PYEOF
 # Verify --usd omission is backward-compatible (exit 0, no crash)
 "${HUB2[@]}" record-cost --task task_acc --tokens 10 >/dev/null || fail "record-cost omit --usd"
 
-echo "== 4/4 orchestrator.py smoke test (resolve_developer_cost_label, explorer_breaker_tripped)"
+echo "== 4/5 orchestrator.py smoke test (resolve_developer_cost_label, explorer_breaker_tripped)"
 SC3="$(mktemp -d)"
 CLEANUP_PATHS+=("$SC3")
 mkdir -p "$SC3/01_insights"
@@ -210,6 +210,78 @@ assert o.compute_hybrid_review_dispatch(data, already_running, cfg2) == [], \
 print("orchestrator.py checks OK")
 PYEOF
 unset AGENT_HUB_DIR
+
+echo "== 5/5 orphan-process reconciliation (survives an orchestrator crash/restart)"
+SC4="$(mktemp -d)"
+CLEANUP_PATHS+=("$SC4")
+mkdir -p "$SC4/01_insights"
+cat > "$SC4/status.json" <<'EOF'
+{"schema_version":1,"project_id":"orphan-smoke","counters":{"insight_seq":0,"task_seq":0},
+ "insights":{},
+ "tasks":{
+   "task_a":{"insight_id":null,"title":"alive orphan","status":"in_progress","target_files":[],"assignee":"developer-a","branch":"task-a","attempts":0,"lease_expires_at":"2099-01-01T00:00:00Z"},
+   "task_b":{"insight_id":null,"title":"dead orphan","status":"in_progress","target_files":[],"assignee":"developer-b","branch":"task-b","attempts":0,"lease_expires_at":"2099-01-01T00:00:00Z"},
+   "task_c":{"insight_id":null,"title":"unrelated PID reuse","status":"in_progress","target_files":[],"assignee":"developer-c","branch":"task-c","attempts":0,"lease_expires_at":"2099-01-01T00:00:00Z"}
+ },
+ "agents":{},"log":[]}
+EOF
+cat > "$SC4/config.json" <<'EOF'
+{"system_settings":{"project_id":"orphan-smoke","concurrency_limit_developer":2,
+ "lease_minutes":30,"max_attempts":3,"daily_token_budget":1000,"log_max_entries":100},
+ "persona_model_mapping":{}}
+EOF
+# alive orphan: cmdline must look like a claude spawn (exec -a fakes argv[0])
+bash -c 'exec -a claude-fake-alive sleep 20' &
+ALIVE_PID=$!
+# dead orphan: exits immediately, PID reused-but-gone by the time we check
+bash -c 'exec -a claude-fake-dead true' &
+DEAD_PID=$!
+wait "$DEAD_PID" 2>/dev/null || true
+# unrelated alive process whose cmdline does NOT contain "claude" (PID-reuse guard)
+sleep 20 &
+UNRELATED_PID=$!
+sleep 0.3
+cat > "$SC4/.running-registry.json" <<EOF
+[
+  {"pid": $ALIVE_PID, "persona": "developer", "agent_id": "developer-a", "cost_label": "task_a", "model": "m", "started_at": 0},
+  {"pid": $DEAD_PID, "persona": "developer", "agent_id": "developer-b", "cost_label": "task_b", "model": "m", "started_at": 0},
+  {"pid": $UNRELATED_PID, "persona": "developer", "agent_id": "developer-c", "cost_label": "task_c", "model": "m", "started_at": 0}
+]
+EOF
+export AGENT_HUB_DIR="$SC4" AGENT_CONFIG="$SC4/config.json"
+python3 - "$SC4" "$ALIVE_PID" <<'PYEOF' || fail "orphan reconciliation"
+import sys, json
+sc, alive_pid = sys.argv[1], int(sys.argv[2])
+sys.path.insert(0, ".")
+import orchestrator as o
+
+orphans = o.reconcile_orphans_from_previous_run()
+ids = {e["agent_id"] for e in orphans}
+assert ids == {"developer-a"}, f"only the genuinely-alive claude orphan should still be tracked, got {ids}"
+
+d = json.load(open(f"{sc}/status.json"))
+assert d["tasks"]["task_a"]["status"] == "in_progress", "alive orphan's task must NOT be released yet"
+assert d["tasks"]["task_b"]["status"] == "todo", "dead orphan's task must be released immediately"
+assert d["tasks"]["task_c"]["status"] == "todo", \
+    "PID-reuse guard: an unrelated non-claude process must not be mistaken for our orphan"
+print("reconcile_orphans_from_previous_run OK")
+PYEOF
+kill "$ALIVE_PID" "$UNRELATED_PID" 2>/dev/null || true
+sleep 0.3
+python3 - "$SC4" "$ALIVE_PID" <<'PYEOF' || fail "orphan reap after exit"
+import sys, json
+sc, alive_pid = sys.argv[1], int(sys.argv[2])
+sys.path.insert(0, ".")
+import orchestrator as o
+
+remaining = o._reap_orphans([{"pid": alive_pid, "persona": "developer", "agent_id": "developer-a",
+                              "cost_label": "task_a", "model": "m", "started_at": 0}])
+assert remaining == [], f"orphan must be dropped from tracking once its process exits, got {remaining}"
+d = json.load(open(f"{sc}/status.json"))
+assert d["tasks"]["task_a"]["status"] == "todo", "task_a must be released once its orphan process exits"
+print("_reap_orphans OK")
+PYEOF
+unset AGENT_HUB_DIR AGENT_CONFIG
 
 echo "all smoke checks passed"
 exit 0

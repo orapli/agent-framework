@@ -7,7 +7,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 command -v python3 >/dev/null 2>&1 || { echo "python3 not found" >&2; exit 2; }
 
-echo "== 1/5 syntax: compile all python + bash -n all shell scripts"
+echo "== 1/6 syntax: compile all python + bash -n all shell scripts"
 python3 -m compileall -q "$ROOT/tools" "$ROOT/orchestrator.py" || exit 1
 for sh in "$ROOT"/tools/*.sh "$ROOT"/scripts/*.sh; do
   bash -n "$sh" || exit 1
@@ -17,7 +17,7 @@ CLEANUP_PATHS=()
 cleanup() { rm -rf "${CLEANUP_PATHS[@]}"; }
 trap cleanup EXIT
 
-echo "== 2/5 hub.py smoke test against a scratch register"
+echo "== 2/6 hub.py smoke test against a scratch register"
 SC="$(mktemp -d)"
 CLEANUP_PATHS+=("$SC")
 mkdir -p "$SC/01_insights" "$SC/03_reports"
@@ -94,7 +94,70 @@ echo "--- archive without --force must refuse: no real product-repo to verify a 
 "${HUB[@]}" archive --task task_001 --force >/dev/null || fail "archive --force"
 grep -q "task_001" "$SC/digest.md" || fail "digest line"
 
-echo "== 3/5 usage shape migration and --usd accumulation"
+echo "== 3/6 status.lock is NOT held during worktree/branch git cleanup (network I/O)"
+SC_LOCK="$(mktemp -d)"
+CLEANUP_PATHS+=("$SC_LOCK")
+mkdir -p "$SC_LOCK/01_insights"
+FAKE_PRODUCT2="$(mktemp -d)"
+CLEANUP_PATHS+=("$FAKE_PRODUCT2")
+git -C "$FAKE_PRODUCT2" init -q -b main
+git -C "$FAKE_PRODUCT2" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+git -C "$FAKE_PRODUCT2" checkout -q -b task-slow
+git -C "$FAKE_PRODUCT2" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "unpushed work"
+git -C "$FAKE_PRODUCT2" checkout -q main
+# A remote whose fetch takes several seconds. GIT_SSH_COMMAND intercepts the
+# transport entirely (no real network egress -- ssh is never actually
+# invoked, our script runs instead), so `git fetch origin task-slow` inside
+# _reclaim_stale_branch is guaranteed to still be sleeping when we probe
+# concurrently below.
+git -C "$FAKE_PRODUCT2" remote add origin "ssh://slow-fake-host/repo.git"
+SLOW_SSH="$SC_LOCK/slow-ssh.sh"
+cat > "$SLOW_SSH" <<'EOF'
+#!/usr/bin/env bash
+sleep 5
+exit 1
+EOF
+chmod +x "$SLOW_SSH"
+
+cat > "$SC_LOCK/status.json" <<'EOF'
+{"schema_version":1,"project_id":"lock-test","counters":{"insight_seq":0,"task_seq":0},
+ "insights":{},
+ "tasks":{
+   "task_slow":{"insight_id":null,"title":"x","status":"in_progress","target_files":[],"assignee":"dev-1","branch":"task-slow","attempts":0,"lease_expires_at":"2099-01-01T00:00:00Z"},
+   "task_other":{"insight_id":null,"title":"y","status":"todo","target_files":[],"assignee":null,"branch":null,"attempts":0,"lease_expires_at":null}
+ },
+ "agents":{},"log":[]}
+EOF
+cat > "$SC_LOCK/config.json" <<'EOF'
+{"system_settings":{"project_id":"lock-test","concurrency_limit_developer":2,
+ "lease_minutes":30,"max_attempts":3,"daily_token_budget":1000,"log_max_entries":100},
+ "persona_model_mapping":{}}
+EOF
+
+export AGENT_HUB_DIR="$SC_LOCK" AGENT_CONFIG="$SC_LOCK/config.json" AGENT_PRODUCT_DIR="$FAKE_PRODUCT2"
+GIT_SSH_COMMAND="$SLOW_SSH" python3 "$ROOT/tools/hub.py" --agent-id dev-1 transition --task task_slow --to todo >/dev/null 2>&1 &
+SLOW_PID=$!
+
+sleep 1   # let the background transition acquire+release status.lock and reach the slow git fetch
+# python3 for timing, not `date +%s%3N` -- this system's uutils/coreutils
+# `date` doesn't truncate %N to milliseconds the way GNU date does, so
+# %s%3N silently prints (wrong-width) nanoseconds instead.
+START_MS=$(python3 -c "import time; print(int(time.time()*1000))")
+# claim-task DOES acquire status.lock (unlike `show`, which reads directly
+# and would pass this test even if the lock were still held) -- a real
+# probe of lock contention, not a no-op.
+python3 "$ROOT/tools/hub.py" --agent-id prober claim-task --persona documenter >/dev/null 2>&1
+END_MS=$(python3 -c "import time; print(int(time.time()*1000))")
+ELAPSED_MS=$((END_MS - START_MS))
+
+wait "$SLOW_PID"
+echo "concurrent claim-task took ${ELAPSED_MS}ms while task-slow's git fetch was sleeping in the background"
+if [ "$ELAPSED_MS" -gt 2000 ]; then
+  fail "status.lock appears to still be held during worktree/branch git cleanup (took ${ELAPSED_MS}ms, expected well under the 5s fetch sleep -- regression of change 42)"
+fi
+unset AGENT_HUB_DIR AGENT_CONFIG AGENT_PRODUCT_DIR
+
+echo "== 4/6 usage shape migration and --usd accumulation"
 SC2="$(mktemp -d)"
 CLEANUP_PATHS+=("$SC2")
 mkdir -p "$SC2/01_insights" "$SC2/03_reports"
@@ -147,7 +210,7 @@ PYEOF
 # Verify --usd omission is backward-compatible (exit 0, no crash)
 "${HUB2[@]}" record-cost --task task_acc --tokens 10 >/dev/null || fail "record-cost omit --usd"
 
-echo "== 4/5 orchestrator.py smoke test (resolve_developer_cost_label, explorer_breaker_tripped)"
+echo "== 5/6 orchestrator.py smoke test (resolve_developer_cost_label, explorer_breaker_tripped)"
 SC3="$(mktemp -d)"
 CLEANUP_PATHS+=("$SC3")
 mkdir -p "$SC3/01_insights"
@@ -372,7 +435,7 @@ print("orchestrator.py checks OK")
 PYEOF
 unset AGENT_HUB_DIR
 
-echo "== 5/5 orphan-process reconciliation (survives an orchestrator crash/restart)"
+echo "== 6/6 orphan-process reconciliation (survives an orchestrator crash/restart)"
 SC4="$(mktemp -d)"
 CLEANUP_PATHS+=("$SC4")
 mkdir -p "$SC4/01_insights"

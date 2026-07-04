@@ -7,7 +7,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 command -v python3 >/dev/null 2>&1 || { echo "python3 not found" >&2; exit 2; }
 
-echo "== 1/3 syntax: compile all python + bash -n all shell scripts"
+echo "== 1/4 syntax: compile all python + bash -n all shell scripts"
 python3 -m compileall -q "$ROOT/tools" "$ROOT/orchestrator.py" || exit 1
 for sh in "$ROOT"/tools/*.sh "$ROOT"/scripts/*.sh; do
   bash -n "$sh" || exit 1
@@ -17,7 +17,7 @@ CLEANUP_PATHS=()
 cleanup() { rm -rf "${CLEANUP_PATHS[@]}"; }
 trap cleanup EXIT
 
-echo "== 2/3 hub.py smoke test against a scratch register"
+echo "== 2/4 hub.py smoke test against a scratch register"
 SC="$(mktemp -d)"
 CLEANUP_PATHS+=("$SC")
 mkdir -p "$SC/01_insights" "$SC/03_reports"
@@ -74,7 +74,7 @@ echo "--- archive without --force must refuse: no real product-repo to verify a 
 "${HUB[@]}" archive --task task_001 --force >/dev/null || fail "archive --force"
 grep -q "task_001" "$SC/digest.md" || fail "digest line"
 
-echo "== 3/3 usage shape migration and --usd accumulation"
+echo "== 3/4 usage shape migration and --usd accumulation"
 SC2="$(mktemp -d)"
 CLEANUP_PATHS+=("$SC2")
 mkdir -p "$SC2/01_insights" "$SC2/03_reports"
@@ -126,6 +126,56 @@ assert abs(slot["usd"] - 0.5) < 1e-9, f"usd expected 0.5 got {slot['usd']}"
 PYEOF
 # Verify --usd omission is backward-compatible (exit 0, no crash)
 "${HUB2[@]}" record-cost --task task_acc --tokens 10 >/dev/null || fail "record-cost omit --usd"
+
+echo "== 4/4 orchestrator.py smoke test (resolve_developer_cost_label, explorer_breaker_tripped)"
+SC3="$(mktemp -d)"
+CLEANUP_PATHS+=("$SC3")
+mkdir -p "$SC3/01_insights"
+cat > "$SC3/status.json" <<'EOF'
+{"schema_version":1,"project_id":"smoke3","counters":{"insight_seq":0,"task_seq":0},
+ "insights":{},"tasks":{},"agents":{},
+ "log":[{"ts":"2026-01-01T00:00:00Z","agent":"developer-1-a","action":"claim","detail":"task_777"}]}
+EOF
+export AGENT_HUB_DIR="$SC3"
+python3 - "$ROOT" <<'PYEOF' || fail "orchestrator.py resolve_developer_cost_label / explorer_breaker_tripped"
+import sys, json
+root = sys.argv[1]
+sys.path.insert(0, root)
+import orchestrator as o
+
+class FakeRun:
+    def __init__(self, persona, agent_id):
+        self.persona, self.agent_id, self.cost_label = persona, agent_id, "developer_run"
+
+r = FakeRun("developer", "developer-1-a")
+got = o.resolve_developer_cost_label(r)
+assert got == "task_777", f"expected task_777, got {got}"
+
+r2 = FakeRun("developer", "developer-never-claimed")
+got2 = o.resolve_developer_cost_label(r2)
+assert got2 == "developer_run", f"never-claimed developer must fall back, got {got2}"
+
+r3 = FakeRun("architect", "architect-1-x")
+r3.cost_label = "architect_cycle"
+got3 = o.resolve_developer_cost_label(r3)
+assert got3 == "architect_cycle", f"non-developer persona must pass through unchanged, got {got3}"
+
+cfg = {"system_settings": {}}
+with open(o.INSIGHT_INDEX, "w") as f:
+    json.dump([{"verdict": "rejected"}] * 8 + [{"verdict": "accepted"}] * 2, f)  # 10 entries, 20%
+assert o.explorer_breaker_tripped(cfg) is False, "exactly-20% (boundary) must NOT trip"
+
+with open(o.INSIGHT_INDEX, "w") as f:
+    json.dump([{"verdict": "rejected"}] * 9 + [{"verdict": "accepted"}], f)  # 10%
+assert o.explorer_breaker_tripped(cfg) is True, "10% acceptance must trip"
+
+with open(o.INSIGHT_INDEX, "w") as f:
+    json.dump([{"verdict": "accepted"}] * 3, f)  # below window (10), not enough history yet
+assert o.explorer_breaker_tripped(cfg) is False, "under-window history must NOT trip"
+
+print("orchestrator.py checks OK")
+PYEOF
+unset AGENT_HUB_DIR
 
 echo "all smoke checks passed"
 exit 0

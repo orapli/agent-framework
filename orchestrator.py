@@ -37,6 +37,9 @@ Usage:
                                   # prompt; proves per-persona model dispatch
   orchestrator.py --mode single_session --model claude-sonnet-4-6 --once
                                   # one-off single-session sweep, this model
+
+Env overrides (used by tests, mirrors tools/hub.py): AGENT_HUB_DIR,
+AGENT_CONFIG, AGENT_PRODUCT_DIR.
 """
 import argparse
 import datetime
@@ -49,12 +52,12 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE = os.path.dirname(HERE)
-HUB = os.path.join(HERE, "agent-hub")
+HUB = os.environ.get("AGENT_HUB_DIR") or os.path.join(HERE, "agent-hub")
 STATUS = os.path.join(HUB, "status.json")
-CONFIG = os.path.join(HERE, "config.json")
+CONFIG = os.environ.get("AGENT_CONFIG") or os.path.join(HERE, "config.json")
 LOCK = os.path.join(HUB, "orchestrator.lock")
 PERSONAS = os.path.join(HERE, "personas")
-PRODUCT = os.path.join(WORKSPACE, "product-repo")
+PRODUCT = os.environ.get("AGENT_PRODUCT_DIR") or os.path.join(WORKSPACE, "product-repo")
 ISSUE_CACHE = os.path.join(HUB, "github-cache", "issues.json")
 CYCLE_STATUS = os.path.join(HUB, "cycle-status.md")
 HUB_PY = os.path.join(HERE, "tools", "hub.py")

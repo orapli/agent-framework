@@ -60,6 +60,7 @@ CYCLE_STATUS = os.path.join(HUB, "cycle-status.md")
 HUB_PY = os.path.join(HERE, "tools", "hub.py")
 COOLDOWN_FILE = os.path.join(HUB, ".limit-cooldown")
 RESUMES_FILE = os.path.join(HUB, ".pending-resumes")
+INSIGHT_INDEX = os.path.join(HUB, "01_insights", "index.json")
 DASHBOARD = os.path.join(HUB, "dashboard")
 RUNS_JSONL = os.path.join(DASHBOARD, "runs.jsonl")
 STATE_JSON = os.path.join(DASHBOARD, "state.json")
@@ -692,6 +693,30 @@ def reap(running, lease_minutes, data=None, cfg=None):
 
 # ── Dispatch (SPEC §7.1) ─────────────────────────────────────────────────────
 
+def explorer_breaker_tripped(cfg):
+    """True when Explorer's own recent insight acceptance rate is too low to
+    justify another auto-spawn. Without this, an empty backlog auto-spawns
+    Explorer forever (compute_dispatch's fallback below) even once it is only
+    producing insights the Architect keeps rejecting — real dogfooding
+    against aero-grep saw a 29% acceptance rate (2/7), i.e. most Explorer
+    spend was already wasted well before any hard budget ceiling kicked in.
+    Returns False (breaker not tripped) whenever there isn't yet enough
+    history to judge, so a fresh workspace is unaffected."""
+    window = int(cfg["system_settings"].get("explorer_breaker_window", 10))
+    min_rate = float(cfg["system_settings"].get("explorer_breaker_min_acceptance", 0.2))
+    index = load_json(INSIGHT_INDEX, [])
+    if not isinstance(index, list) or len(index) < window:
+        return False
+    recent = index[-window:]
+    accepted = sum(1 for e in recent if e.get("verdict") == "accepted")
+    rate = accepted / len(recent)
+    if rate < min_rate:
+        log(f"explorer circuit breaker: {accepted}/{len(recent)} of last {window} insights "
+            f"accepted ({rate:.0%} < {min_rate:.0%} threshold) — not auto-spawning Explorer")
+        return True
+    return False
+
+
 def compute_dispatch(data, running, cfg):
     """Decide which personas to spawn this poll. One architect / qa / documenter
     / explorer at a time; developers up to the configured process count."""
@@ -755,7 +780,8 @@ def compute_dispatch(data, running, cfg):
                      "developer_run", "developer"))
 
     if not todo and not running and not resume_holders and not proposed \
-       and not todo_tasks and not implemented and not approved and not qa_passed:
+       and not todo_tasks and not implemented and not approved and not qa_passed \
+       and not explorer_breaker_tripped(cfg):
         todo.append(("explorer",
                      "Explore ../product-repo for new insights per your persona definition. "
                      "Register at most 3 new insights this run, then stop.",

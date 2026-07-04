@@ -28,6 +28,15 @@ Execution modes (system_settings.execution_mode, or --mode for one run):
                   once per phase — the right choice when token/session
                   budget is the binding constraint rather than latency or
                   per-phase model specialization. See SPEC §7.9.
+  hybrid          single_session's cost profile for Explorer / Architect Mode
+                  A (verdicts + decomposition) / Developer / Documenter, but
+                  Architect Mode B (diff review) and QA ALWAYS spawn as
+                  separate fresh processes with their own models, same as
+                  multi_process — so the context that wrote a task's code
+                  never also reviews it. The middle ground when
+                  single_session's session/cache savings matter but its
+                  self-review risk (same context authors and approves its
+                  own work) does not sit well. See SPEC §7.9.
 
 Usage:
   orchestrator.py                 # poll loop (Ctrl-C to stop)
@@ -37,6 +46,9 @@ Usage:
                                   # prompt; proves per-persona model dispatch
   orchestrator.py --mode single_session --model claude-sonnet-4-6 --once
                                   # one-off single-session sweep, this model
+  orchestrator.py --mode hybrid --once
+                                  # one-off hybrid sweep (review/QA still
+                                  # spawn separately per persona_model_mapping)
 
 Env overrides (used by tests, mirrors tools/hub.py): AGENT_HUB_DIR,
 AGENT_CONFIG, AGENT_PRODUCT_DIR.
@@ -346,6 +358,135 @@ def spawn_single_session(data, cfg, dry_run):
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     log(f"spawned single_session (model={model}, pid={proc.pid})")
     return Run("single_session", agent_id, "single_session_cycle", proc, time.time(), model)
+
+
+# ── Hybrid mode (SPEC §7.9): single_session for authorship, separate spawns
+# for review ──────────────────────────────────────────────────────────────
+
+HYBRID_PERSONAS = ("explorer", "architect", "developer", "documenter")
+
+HYBRID_SESSION_PREAMBLE = """
+## Hybrid mode (orchestrator.py --mode hybrid)
+
+You are running as ONE continuous session covering Explorer, Architect Mode A
+(insight verdicts + task decomposition ONLY), Developer, and Documenter —
+instead of one separate spawned process per role. This amortizes the fixed
+cost of loading this system prompt and the workspace context across a
+pipeline sweep, same rationale as single_session mode (SPEC §7.9). All four
+persona definitions follow; adopt whichever fits each piece of work, and say
+so explicitly (e.g. "Acting as Architect:") before each piece of work so the
+run log stays auditable per role.
+
+Unlike single_session mode, Architect Mode B (reviewing implemented task
+branches) and QA verification of approved tasks are DELIBERATELY EXCLUDED
+from this session and instead run as separate, freshly-spawned processes
+with no memory of this session. Do not perform either yourself, even for a
+task you recognize as one you just implemented — the entire point of hybrid
+mode is that the code you write is judged by a reviewer that never saw you
+write it. If you see tasks in state `implemented` or `approved_by_architect`,
+leave them alone; they are being handled elsewhere.
+
+Work through the queue below in order. After each item, use
+`python3 tools/hub.py --agent-id {agent_id} transition ...` (and `add-task`/
+`insight-verdict`/`archive` as appropriate) exactly as a standalone persona
+would — the state register does not know or care that one session is playing
+multiple roles. If you run out of context budget partway through, finish the
+item you are on cleanly (commit/push or a clean hub.py state), then stop and
+summarize what remains — the next hybrid session will pick it up from the
+register's current state.
+
+--- Persona definitions (Explorer, Architect, Developer, Documenter) ---
+
+"""
+
+
+def build_hybrid_session_system_prompt(agent_id):
+    parts = [HYBRID_SESSION_PREAMBLE.format(agent_id=agent_id)]
+    for persona in HYBRID_PERSONAS:
+        with open(os.path.join(PERSONAS, f"{persona}.md")) as f:
+            parts.append(f"### {persona}\n\n" + f.read() + "\n")
+    parts.append(WORKSPACE_CONTRACT.format(framework=HERE, agent_id=agent_id))
+    return "\n".join(parts)
+
+
+def build_hybrid_session_prompt(data):
+    """Like build_single_session_prompt, but the queue omits Architect Mode B
+    (implemented-task review) and QA (approved-task verification) — those are
+    dispatched separately by compute_hybrid_review_dispatch on purpose, so
+    the implementer is never also the reviewer."""
+    tasks = data.get("tasks", {})
+    insights = data.get("insights", {})
+    proposed = sorted(i for i, v in insights.items() if v.get("status") == "proposed")
+    todo_tasks = sorted(t for t, v in tasks.items() if v["status"] == "todo")
+    qa_passed = sorted(t for t, v in tasks.items() if v["status"] == "qa_passed")
+
+    lines = ["Work through this queue, in this order, switching roles as needed:", ""]
+    if proposed:
+        lines.append(f"1. As Architect (Mode A ONLY — verdicts + task decomposition, "
+                     f"never diff review): {', '.join(proposed)}")
+    if qa_passed:
+        lines.append(f"2. As Documenter: finalize documentation and open the PR for: "
+                     f"{', '.join(qa_passed)}")
+    if todo_tasks:
+        lines.append(f"3. As Developer: implement todo tasks (claim one at a time via "
+                     f"`hub.py claim-task --persona developer`): {', '.join(todo_tasks)}")
+    if not any([proposed, qa_passed, todo_tasks]):
+        lines.append("Nothing pending for this session. As Explorer: explore "
+                     "../product-repo for new insights per your persona definition. "
+                     "Register at most 3, then stop.")
+    return "\n".join(lines)
+
+
+def spawn_hybrid_session(data, cfg, dry_run):
+    """One process, one model, covering Explorer/Architect-Mode-A/Developer/
+    Documenter. Architect Mode B review and QA always run as separate fresh
+    spawns instead (compute_hybrid_review_dispatch), so the same context
+    that wrote the code never also reviews it. See SPEC §7.9."""
+    model = cfg["system_settings"].get("single_session_model") \
+        or cfg["persona_model_mapping"]["developer"]["model"]
+    agent_id = f"hybrid-{int(time.time()) % 100000}-{os.urandom(2).hex()}"
+    prompt = build_hybrid_session_prompt(data)
+    if dry_run:
+        log(f"DRY-RUN would spawn hybrid_session (model={model}):\n{prompt}")
+        return None
+    env = dict(os.environ)
+    env["PATH"] = os.path.expanduser("~/.cargo/bin") + os.pathsep + env.get("PATH", "")
+    env["AGENT_ID"] = agent_id
+    cmd = [
+        "claude", "-p", prompt,
+        "--model", model,
+        "--append-system-prompt", build_hybrid_session_system_prompt(agent_id),
+        "--output-format", "json",
+        "--dangerously-skip-permissions",
+    ]
+    proc = subprocess.Popen(cmd, cwd=HERE, env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    log(f"spawned hybrid_session (model={model}, pid={proc.pid})")
+    return Run("hybrid_session", agent_id, "hybrid_session_cycle", proc, time.time(), model)
+
+
+def compute_hybrid_review_dispatch(data, running, cfg):
+    """hybrid mode: Architect Mode B (diff review) and QA always run as
+    separate, freshly-spawned processes — never folded into the hybrid
+    session that also writes the code, so the reviewer is never the same
+    context as the implementer. A slice of compute_dispatch's logic,
+    decoupled from Mode A (insight verdicts + task decomposition), which the
+    hybrid session itself handles."""
+    todo = []
+    active = {r.persona for r in running}
+    tasks = data.get("tasks", {})
+    implemented = sorted(t for t, v in tasks.items() if v["status"] == "implemented")
+    approved = sorted(t for t, v in tasks.items() if v["status"] == "approved_by_architect")
+
+    if implemented and "architect" not in active:
+        todo.append(("architect",
+                     f"Review implemented task branches (Mode B): {', '.join(implemented)}",
+                     "architect_cycle", "architect_review"))
+    if approved and "qa_tester" not in active:
+        todo.append(("qa_tester",
+                     f"Run QA on tasks awaiting verification: {', '.join(approved)}",
+                     approved[0], "qa_tester"))
+    return todo
 
 
 # ── Session-limit awareness + crash resume ───────────────────────────────────
@@ -880,11 +1021,11 @@ def main():
     p.add_argument("--once", action="store_true", help="one poll cycle, wait for agents")
     p.add_argument("--dry-run", action="store_true", help="print dispatch, spawn nothing")
     p.add_argument("--selftest", action="store_true", help="verify per-persona model dispatch")
-    p.add_argument("--mode", choices=["multi_process", "single_session"], default=None,
+    p.add_argument("--mode", choices=["multi_process", "single_session", "hybrid"], default=None,
                    help="overrides system_settings.execution_mode for this run")
     p.add_argument("--model", default=None,
                    help="overrides system_settings.single_session_model for this run "
-                        "(single_session mode only)")
+                        "(single_session/hybrid mode only)")
     args = p.parse_args()
 
     cfg = load_config()
@@ -895,9 +1036,9 @@ def main():
         cfg["persona_model_mapping"] = dict(cfg["persona_model_mapping"])
         cfg["system_settings"] = dict(cfg["system_settings"])
         cfg["system_settings"]["single_session_model"] = args.model
-    if mode not in ("multi_process", "single_session"):
+    if mode not in ("multi_process", "single_session", "hybrid"):
         sys.exit(f"invalid execution_mode '{mode}' in config.json "
-                 f"(expected 'multi_process' or 'single_session')")
+                 f"(expected 'multi_process', 'single_session', or 'hybrid')")
 
     if shutil.which("claude") is None:
         sys.exit("claude CLI not found in PATH — the orchestrator needs it to spawn personas")
@@ -949,6 +1090,25 @@ def main():
                     # concurrent one would just race it over the same tasks.
                     if not running:
                         run = spawn_single_session(data, cfg, args.dry_run)
+                        if run:
+                            running.append(run)
+                elif mode == "hybrid":
+                    # Review/QA spawn independently, exactly like multi_process,
+                    # so the reviewer is never the same context as the author.
+                    for persona, prompt, cost_label, model_key in \
+                            compute_hybrid_review_dispatch(data, running, cfg):
+                        if len(running) >= max_spawns:
+                            break
+                        run = spawn(persona, prompt, cost_label, cfg, args.dry_run,
+                                    model_key=model_key)
+                        if run:
+                            running.append(run)
+                    # One hybrid session for everything else (explorer/verdicts+
+                    # decompose/developer/documenter) — never more than one at a
+                    # time, same reasoning as single_session above.
+                    if not any(r.persona == "hybrid_session" for r in running) \
+                            and len(running) < max_spawns:
+                        run = spawn_hybrid_session(data, cfg, args.dry_run)
                         if run:
                             running.append(run)
                 else:

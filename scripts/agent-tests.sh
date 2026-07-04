@@ -173,6 +173,40 @@ with open(o.INSIGHT_INDEX, "w") as f:
     json.dump([{"verdict": "accepted"}] * 3, f)  # below window (10), not enough history yet
 assert o.explorer_breaker_tripped(cfg) is False, "under-window history must NOT trip"
 
+# hybrid mode: Mode B review / QA must dispatch separately and never appear
+# in the hybrid session's own queue -- the whole point is the reviewer is
+# never the same context as the implementer.
+data = {
+    "insights": {"insight_a": {"status": "proposed"}},
+    "tasks": {
+        "task_001": {"status": "implemented"},
+        "task_002": {"status": "approved_by_architect"},
+        "task_003": {"status": "todo"},
+    },
+}
+cfg2 = {"persona_model_mapping": {
+    "architect": {"model": "m-architect"}, "architect_review": {"model": "m-review"},
+    "qa_tester": {"model": "m-qa"}, "developer": {"model": "m-dev"},
+}}
+review_dispatch = o.compute_hybrid_review_dispatch(data, [], cfg2)
+personas_dispatched = {item[0] for item in review_dispatch}
+assert personas_dispatched == {"architect", "qa_tester"}, \
+    f"expected architect+qa_tester dispatched separately, got {personas_dispatched}"
+architect_item = next(i for i in review_dispatch if i[0] == "architect")
+assert architect_item[3] == "architect_review", \
+    f"Mode B review must use the architect_review model key, got {architect_item[3]}"
+
+hybrid_prompt = o.build_hybrid_session_prompt(data)
+assert "task_001" not in hybrid_prompt, "hybrid session must NOT queue the implemented task itself"
+assert "task_002" not in hybrid_prompt, "hybrid session must NOT queue the approved task itself"
+assert "insight_a" in hybrid_prompt and "task_003" in hybrid_prompt, \
+    "hybrid session must still queue proposed insights and todo tasks"
+
+# already-running architect/qa_tester must not be double-dispatched
+already_running = [type("R", (), {"persona": "architect"})(), type("R", (), {"persona": "qa_tester"})()]
+assert o.compute_hybrid_review_dispatch(data, already_running, cfg2) == [], \
+    "must not re-dispatch architect/qa_tester while one is already running"
+
 print("orchestrator.py checks OK")
 PYEOF
 unset AGENT_HUB_DIR

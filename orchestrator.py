@@ -10,7 +10,13 @@ and the personas.
 Persona runner: `claude -p` with
   --model                    from config.json persona_model_mapping
   --append-system-prompt     personas/<name>.md + the workspace contract
-  --output-format json       usage parsed for mechanical cost recording
+  --output-format stream-json + --verbose
+                             drained continuously by a background thread
+                             (_drain_stdout) into a live one-line
+                             "last_activity" per running persona (dashboard
+                             state.json); the final `type: "result"` event
+                             is parsed the same way the old single-shot
+                             `json` format's one payload was
   --dangerously-skip-permissions   (sandboxed environment)
 Note: temperature / max_tokens in config.json are advisory — the Claude Code
 CLI does not expose these parameters.
@@ -60,6 +66,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -302,6 +309,94 @@ class Run:
         self.proc = proc
         self.started = started
         self.model = model
+        # Populated by _drain_stdout() as stream-json events arrive. Plain
+        # attribute writes / list.append are atomic under the GIL, so no
+        # lock is needed for this single-writer (reader thread) /
+        # single-reader (main loop, dashboard) pattern.
+        self.stdout_lines = []
+        self.last_activity = None
+        self.reader_thread = None
+
+
+def _activity_line_from_event(line):
+    """Parse one stream-json line and return a short human-readable summary
+    of the most recent thing the agent did (tool call or assistant text), or
+    None if this event type has nothing worth surfacing (system/result/
+    rate_limit events, or a malformed line)."""
+    try:
+        d = json.loads(line)
+    except Exception:
+        return None
+    t = d.get("type")
+    if t == "assistant":
+        for block in d.get("message", {}).get("content", []):
+            bt = block.get("type")
+            if bt == "tool_use":
+                name = block.get("name", "?")
+                inp = block.get("input", {}) or {}
+                detail = (inp.get("command") or inp.get("file_path") or inp.get("pattern")
+                          or inp.get("description") or next(iter(inp.values()), ""))
+                return f"{name}: {str(detail)[:100]}"
+            if bt == "text":
+                text = (block.get("text") or "").strip().replace("\n", " ")
+                if text:
+                    return text[:100]
+    elif t == "user":
+        for block in d.get("message", {}).get("content", []):
+            if block.get("type") == "tool_result":
+                content = block.get("content")
+                if isinstance(content, list):
+                    content = " ".join(str(c.get("text", "")) for c in content if isinstance(c, dict))
+                text = str(content).strip().replace("\n", " ")
+                if text:
+                    return f"(result) {text[:100]}"
+    return None
+
+
+def _drain_stdout(proc, run):
+    """Continuously read stream-json lines from `proc.stdout`, updating
+    `run.last_activity` as events arrive and accumulating every line into
+    `run.stdout_lines` for final result extraction. Runs in a background
+    thread for the process's whole lifetime.
+
+    This is required for correctness, not just for the live-activity
+    feature: unlike the old single-shot `--output-format json` (which only
+    ever writes one line, right before the child exits), `stream-json`
+    writes incrementally throughout execution. If nothing drains the pipe,
+    output exceeding the OS pipe buffer would block the child process from
+    writing further — i.e. every long-running spawn would eventually hang
+    without a continuous reader."""
+    for line in iter(proc.stdout.readline, ""):
+        line = line.strip()
+        if not line:
+            continue
+        run.stdout_lines.append(line)
+        activity = _activity_line_from_event(line)
+        if activity:
+            run.last_activity = activity
+    proc.stdout.close()
+
+
+def _start_reader(run):
+    t = threading.Thread(target=_drain_stdout, args=(run.proc, run), daemon=True)
+    t.start()
+    run.reader_thread = t
+
+
+def _final_result_payload(run):
+    """The last `type: "result"` event in a stream-json run has the exact
+    same shape as --output-format json's single payload (same `result`,
+    `total_cost_usd`, `modelUsage`, `session_id` fields) — search backwards
+    for it so tokens_from_result/cost_usd_from_result/_limit_hit work
+    unchanged regardless of which output format produced the data."""
+    for line in reversed(run.stdout_lines):
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if d.get("type") == "result":
+            return d
+    return None
 
 
 def spawn(persona, user_prompt, cost_label, cfg, dry_run, model_key=None):
@@ -324,13 +419,16 @@ def spawn(persona, user_prompt, cost_label, cfg, dry_run, model_key=None):
         "claude", "-p", user_prompt,
         "--model", model,
         "--append-system-prompt", build_system_prompt(persona, agent_id),
-        "--output-format", "json",
+        "--output-format", "stream-json",
+        "--verbose",
         "--dangerously-skip-permissions",
     ]
     proc = subprocess.Popen(cmd, cwd=HERE, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    run = Run(persona, agent_id, cost_label, proc, time.time(), model)
+    _start_reader(run)
     log(f"spawned {persona} (model={model}, pid={proc.pid}) for: {cost_label}")
-    return Run(persona, agent_id, cost_label, proc, time.time(), model)
+    return run
 
 
 def spawn_single_session(data, cfg, dry_run):
@@ -351,13 +449,16 @@ def spawn_single_session(data, cfg, dry_run):
         "claude", "-p", prompt,
         "--model", model,
         "--append-system-prompt", build_single_session_system_prompt(agent_id),
-        "--output-format", "json",
+        "--output-format", "stream-json",
+        "--verbose",
         "--dangerously-skip-permissions",
     ]
     proc = subprocess.Popen(cmd, cwd=HERE, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    run = Run("single_session", agent_id, "single_session_cycle", proc, time.time(), model)
+    _start_reader(run)
     log(f"spawned single_session (model={model}, pid={proc.pid})")
-    return Run("single_session", agent_id, "single_session_cycle", proc, time.time(), model)
+    return run
 
 
 # ── Hybrid mode (SPEC §7.9): single_session for authorship, separate spawns
@@ -456,13 +557,16 @@ def spawn_hybrid_session(data, cfg, dry_run):
         "claude", "-p", prompt,
         "--model", model,
         "--append-system-prompt", build_hybrid_session_system_prompt(agent_id),
-        "--output-format", "json",
+        "--output-format", "stream-json",
+        "--verbose",
         "--dangerously-skip-permissions",
     ]
     proc = subprocess.Popen(cmd, cwd=HERE, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    run = Run("hybrid_session", agent_id, "hybrid_session_cycle", proc, time.time(), model)
+    _start_reader(run)
     log(f"spawned hybrid_session (model={model}, pid={proc.pid})")
-    return Run("hybrid_session", agent_id, "hybrid_session_cycle", proc, time.time(), model)
+    return run
 
 
 def compute_hybrid_review_dispatch(data, running, cfg):
@@ -598,15 +702,18 @@ def spawn_resume(entry, cfg, dry_run):
         "left off and finish the task per your original instructions.",
         "--resume", entry["session_id"],
         "--model", entry["model"],
-        "--output-format", "json",
+        "--output-format", "stream-json",
+        "--verbose",
         "--dangerously-skip-permissions",
     ]
     proc = subprocess.Popen(cmd, cwd=HERE, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    run = Run(entry["persona"], entry["agent_id"], entry["cost_label"],
+              proc, time.time(), entry["model"])
+    _start_reader(run)
     log(f"RESUMED {entry['persona']} (model={entry['model']}, pid={proc.pid}) "
         f"for: {entry['cost_label']}")
-    return Run(entry["persona"], entry["agent_id"], entry["cost_label"],
-               proc, time.time(), entry["model"])
+    return run
 
 
 def tokens_from_result(payload):
@@ -693,8 +800,25 @@ def _write_dashboard_state(data, running, cfg):
                 "state": "running" if active else "idle",
                 "cost_label": active.cost_label if active else None,
                 "elapsed_s": round(time.time() - active.started, 1) if active else None,
+                "last_activity": active.last_activity if active else None,
                 "last_20_runs": last20,
             }
+
+        # single_session/hybrid_session runs use persona names
+        # ("single_session"/"hybrid_session") that never match a
+        # persona_model_mapping key, so they'd otherwise be invisible above
+        # — surface whichever one is currently active separately.
+        active_session = None
+        for r in running:
+            if r.persona in ("single_session", "hybrid_session"):
+                active_session = {
+                    "kind": r.persona,
+                    "model": r.model,
+                    "cost_label": r.cost_label,
+                    "elapsed_s": round(time.time() - r.started, 1),
+                    "last_activity": r.last_activity,
+                }
+                break
 
         usage = data.get("usage", {})
         today_tokens = _tokens(usage.get("per_day", {}).get(today_str, 0))
@@ -752,6 +876,7 @@ def _write_dashboard_state(data, running, cfg):
                 "heartbeat": now().strftime("%Y-%m-%dT%H:%M:%SZ"),
             },
             "personas": personas_state,
+            "active_session": active_session,
             "tasks": tasks,
             "insights": insights,
             "budget": {
@@ -825,12 +950,16 @@ def reap(running, lease_minutes, data=None, cfg=None):
             else:
                 still.append(run)
                 continue
-        out, err = run.proc.communicate()
-        payload = None
-        try:
-            payload = json.loads(out)
-        except Exception:
-            pass
+        # Stdout is drained continuously by the background reader thread
+        # (_start_reader), not read here — a single final communicate() would
+        # race that thread and, since stream-json writes incrementally, may
+        # have already been partly consumed by it. Just wait for the thread
+        # to finish (it terminates on its own once the closed pipe EOFs,
+        # which happens at or right after process exit) and read stderr,
+        # which our thread never touches.
+        run.reader_thread.join(timeout=5)
+        err = run.proc.stderr.read() if run.proc.stderr else ""
+        payload = _final_result_payload(run)
         run.cost_label = resolve_developer_cost_label(run)
         if payload:
             tokens = tokens_from_result(payload)

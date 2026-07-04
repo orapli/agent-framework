@@ -120,10 +120,42 @@ h2 {
   margin-top: 4px;
 }
 
+.persona-activity {
+  font-size: 10px;
+  color: var(--muted);
+  font-style: italic;
+  word-break: break-all;
+  margin-top: 2px;
+}
+
 .persona-cost {
   font-size: 11px;
   color: var(--yellow);
   margin-top: 6px;
+}
+
+.session-banner {
+  background: var(--bg-mantle);
+  border: 1px solid var(--bg-surface0);
+  border-left-width: 3px;
+  border-left-color: var(--accent);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.session-banner .session-kind {
+  font-weight: 700;
+  margin-right: 8px;
+}
+
+.session-banner .session-activity {
+  color: var(--subtext);
+  font-style: italic;
+  word-break: break-all;
+  display: block;
+  margin-top: 4px;
 }
 
 /* ── middle row ── */
@@ -523,14 +555,15 @@ h2 {
   }
 
   function build(state) {
-    var orch   = state.orchestrator  || {};
-    var pers   = state.personas      || {};
-    var tasks  = state.tasks         || {};
-    var ins    = state.insights      || {};
-    var budget = state.budget        || {};
-    var costs  = state.costs         || {};
-    var eff    = state.effectiveness || {};
-    var log    = state.log_tail      || [];
+    var orch   = state.orchestrator   || {};
+    var pers   = state.personas       || {};
+    var sess   = state.active_session || null;
+    var tasks  = state.tasks          || {};
+    var ins    = state.insights       || {};
+    var budget = state.budget         || {};
+    var costs  = state.costs          || {};
+    var eff    = state.effectiveness  || {};
+    var log    = state.log_tail       || [];
 
     /* staleness */
     var poll_s   = +(orch.poll_seconds || 60);
@@ -540,6 +573,7 @@ h2 {
 
     return [
       build_header(orch, orch_ok),
+      build_active_session(sess),
       build_personas(pers, costs),
       build_mid(tasks, ins, eff),
       build_bot(budget, costs, log),
@@ -586,16 +620,36 @@ h2 {
           '</div>';
       }
 
+      var activity_html = '';
+      if (running && p.last_activity) {
+        activity_html = '<div class="persona-activity">' + esc(p.last_activity) + '</div>';
+      }
+
       return '<div class="persona-card" style="border-top-color:' + col + '">' +
         '<div class="persona-name" style="color:' + col + '">' + esc(name) + '</div>' +
         '<div class="persona-model">' + esc(p.model || '—') + '</div>' +
         '<div class="persona-state">' + state_badge + '</div>' +
         work_html +
+        activity_html +
         '<div class="persona-cost">↑ ' + fmt_usd(c.today_usd) + ' today</div>' +
         '</div>';
     }).join('');
 
     return '<div class="persona-row">' + cards + '</div>';
+  }
+
+  /* ── single_session / hybrid_session banner ── */
+  function build_active_session(sess) {
+    if (!sess) return '';
+    return '<div class="session-banner">' +
+      '<span class="session-kind">' + esc(sess.kind) + '</span>' +
+      '<span class="persona-model">' + esc(sess.model || '—') + '</span> · ' +
+      esc(sess.cost_label || '') +
+      (sess.elapsed_s != null ? ' (' + fmt_elapsed(sess.elapsed_s) + ')' : '') +
+      (sess.last_activity
+        ? '<span class="session-activity">' + esc(sess.last_activity) + '</span>'
+        : '') +
+      '</div>';
   }
 
   /* ── middle row ── */

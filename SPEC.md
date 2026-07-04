@@ -1,4 +1,4 @@
-# Multi-Agent Framework Specification v2.13
+# Multi-Agent Framework Specification v2.14
 
 Autonomous, parallel, cost-bounded optimization of a target GitHub repository by
 specialized AI personas, coordinated exclusively through file-based artifacts and
@@ -101,6 +101,12 @@ a lock-gated state register.
 | # | Change | Rationale |
 |---|--------|-----------|
 | 33 | New `execution_mode` value `hybrid`: Explorer / Architect Mode A (verdicts + task decomposition) / Developer / Documenter share one `single_session`-style process, but Architect Mode B (diff review) and QA ALWAYS spawn as separate fresh processes with their own models (`compute_hybrid_review_dispatch`, reusing `spawn()` exactly as `multi_process` does) | `single_session` amortizes spawn overhead well (SPEC §7.9, change 29) but has a structural self-review problem: the same context that authors a task's code can also be the one that approves it via Architect Mode B / QA, with only a prompt instruction ("QA review must still be genuine, not a rubber stamp") standing against confirmation bias — and the only archive-safety incident this framework has had (change 30) happened during a `single_session` run. `hybrid` keeps the session/cache savings for authorship-side roles while guaranteeing the reviewer is a fresh process that never saw the implementation happen |
+
+## Changelog from v2.13 (v2.14)
+
+| # | Change | Rationale |
+|---|--------|-----------|
+| 35 | `.running-registry.json` persists every currently-tracked process (pid, persona, agent_id, cost_label, model, started_at) every poll cycle. On startup, `reconcile_orphans_from_previous_run()` reads it: for each entry whose PID is still alive (cross-checked against `/proc/<pid>/cmdline` containing "claude" where `/proc` is available, to guard against PID-reuse after a full restart), keep tracking it and wait for it to exit (`_reap_orphans`, re-checked every poll cycle) before releasing its claim; for one already gone, release its claim (`_release_claims_of`, no attempt burned) immediately | Before this, `running` was in-memory only — an orchestrator crash (not a graceful `Ctrl-C`) orphaned every process it had spawned with no record of them anywhere, leaving their claimed tasks stuck `in_progress` until the (up to `lease_minutes`, default 30) lease timeout, even though the underlying failure was infrastructure, not the work. A restarted orchestrator's own `Popen` handles are gone regardless — it cannot `waitpid()` a process it isn't the real parent of, and each orphan's stdout pipe read-end died with the old orchestrator (broken pipe on next write) — so live reattachment isn't achievable with plain subprocess/`os` primitives; releasing the claim promptly instead of waiting out the lease is the realistic fix |
 
 ## Changelog from v2.12 (v2.13)
 
@@ -315,6 +321,21 @@ Architect-approved (§12.2) or by a human — the worktree is removed
 Documenter writes `changelog.d/task_{id}.md` (one file per task) on the task
 branch — never `CHANGELOG.md` directly. Fragments are merged into
 `CHANGELOG.md` by the human (or a dedicated release task) at release time.
+
+### 6.5 Orphan process reconciliation (change 35)
+
+The lease (§6.1) recovers a task whose developer stalled or hung, but only
+after `lease_minutes`. An orchestrator *process crash* (not a graceful
+`Ctrl-C`) is a distinct failure mode: every process it had spawned via
+`subprocess.Popen` becomes an orphan the instant it dies, with no in-memory
+record surviving to the next run. `.running-registry.json`
+(`agent-hub/.running-registry.json`, gitignored) exists specifically to
+close that gap — see change 35 above and `reconcile_orphans_from_previous_run()`
+in `orchestrator.py` for the mechanism. This is best-effort recovery of the
+*task claim*, not of the orphaned process itself: its stdout pipe read-end
+died with the old orchestrator, so nothing further it writes is observable,
+and it cannot be `waitpid()`-ed for an exit status by a process that isn't
+its real parent.
 
 ## 7. Orchestrator (`orchestrator.py`)
 

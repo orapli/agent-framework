@@ -13,10 +13,23 @@ for sh in "$ROOT"/tools/*.sh "$ROOT"/scripts/*.sh; do
   bash -n "$sh" || exit 1
 done
 
+CLEANUP_PATHS=()
+cleanup() { rm -rf "${CLEANUP_PATHS[@]}"; }
+trap cleanup EXIT
+
 echo "== 2/3 hub.py smoke test against a scratch register"
 SC="$(mktemp -d)"
-trap 'rm -rf "$SC"' EXIT
+CLEANUP_PATHS+=("$SC")
 mkdir -p "$SC/01_insights" "$SC/03_reports"
+# Isolated fake product-repo: archive's merge-verification must never see the
+# real workspace product-repo (which, in a dogfooding sandbox, may genuinely
+# contain a merged PR from a coincidentally-matching branch name like
+# "task-001" -- that would make this test's "unverifiable merge" assertion
+# below pass for the wrong reason). No commits/no origin remote => both the
+# ancestor check and the tree-hash check deterministically fail.
+FAKE_PRODUCT="$(mktemp -d)"
+CLEANUP_PATHS+=("$FAKE_PRODUCT")
+git -C "$FAKE_PRODUCT" init -q
 cat > "$SC/status.json" <<'EOF'
 {"schema_version":1,"project_id":"smoke","counters":{"insight_seq":0,"task_seq":0},
  "insights":{},"tasks":{},"agents":{},"log":[]}
@@ -35,7 +48,7 @@ cat > "$SC/t.json" <<'EOF'
  "target_files":["x"],"status":"todo"}
 EOF
 
-export AGENT_HUB_DIR="$SC" AGENT_CONFIG="$SC/config.json"
+export AGENT_HUB_DIR="$SC" AGENT_CONFIG="$SC/config.json" AGENT_PRODUCT_DIR="$FAKE_PRODUCT"
 HUB=(python3 "$ROOT/tools/hub.py" --agent-id smoke)
 
 fail() { echo "SMOKE FAIL: $1" >&2; exit 1; }
@@ -63,7 +76,7 @@ grep -q "task_001" "$SC/digest.md" || fail "digest line"
 
 echo "== 3/3 usage shape migration and --usd accumulation"
 SC2="$(mktemp -d)"
-trap 'rm -rf "$SC2"' EXIT
+CLEANUP_PATHS+=("$SC2")
 mkdir -p "$SC2/01_insights" "$SC2/03_reports"
 # Seed a register with bare-int usage values to test int->object migration
 cat > "$SC2/status.json" <<'EOF'

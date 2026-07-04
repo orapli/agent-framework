@@ -20,7 +20,7 @@ Subcommands (SPEC §3):
 Exit codes: 0 success, 1 invalid transition / not found / missing reason,
 3 nothing to claim (not an error).
 
-Env overrides (used by tests): AGENT_HUB_DIR, AGENT_CONFIG.
+Env overrides (used by tests): AGENT_HUB_DIR, AGENT_CONFIG, AGENT_PRODUCT_DIR.
 """
 import argparse
 import datetime
@@ -32,7 +32,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 FRAMEWORK = os.path.normpath(os.path.join(HERE, ".."))
 WORKSPACE = os.path.dirname(FRAMEWORK)
-PRODUCT = os.path.join(WORKSPACE, "product-repo")
+PRODUCT = os.environ.get("AGENT_PRODUCT_DIR") or os.path.join(WORKSPACE, "product-repo")
 HUB = os.environ.get("AGENT_HUB_DIR") or os.path.join(FRAMEWORK, "agent-hub")
 STATUS = os.path.join(HUB, "status.json")
 LOCKFILE = os.path.join(HUB, "status.lock")

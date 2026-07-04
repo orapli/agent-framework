@@ -20,7 +20,7 @@ Subcommands (SPEC §3):
 Exit codes: 0 success, 1 invalid transition / not found / missing reason,
 3 nothing to claim (not an error).
 
-Env overrides (used by tests): AGENT_HUB_DIR, AGENT_CONFIG.
+Env overrides (used by tests): AGENT_HUB_DIR, AGENT_CONFIG, AGENT_PRODUCT_DIR.
 """
 import argparse
 import datetime
@@ -32,7 +32,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 FRAMEWORK = os.path.normpath(os.path.join(HERE, ".."))
 WORKSPACE = os.path.dirname(FRAMEWORK)
-PRODUCT = os.path.join(WORKSPACE, "product-repo")
+PRODUCT = os.environ.get("AGENT_PRODUCT_DIR") or os.path.join(WORKSPACE, "product-repo")
 HUB = os.environ.get("AGENT_HUB_DIR") or os.path.join(FRAMEWORK, "agent-hub")
 STATUS = os.path.join(HUB, "status.json")
 LOCKFILE = os.path.join(HUB, "status.lock")
@@ -420,6 +420,40 @@ def cmd_record_cost(args):
     return 0
 
 
+def _repo_slug():
+    """'owner/repo' from product-repo's origin remote, or None if unavailable."""
+    r = subprocess.run(["git", "-C", PRODUCT, "remote", "get-url", "origin"],
+                       capture_output=True, text=True)
+    url = r.stdout.strip()
+    if "github.com" in url:
+        return url.split("github.com")[-1].lstrip(":/").removesuffix(".git")
+    return None
+
+
+def _pr_merged_via_api(branch):
+    """Fallback for squash/rebase merges: the branch tip is never an
+    ancestor of main in that case even though the code did land, so ask
+    GitHub directly whether a PR from this head branch was merged. Relies on
+    the sandbox proxy's transparent credential injection for the GitHub API
+    (same mechanism already used by orchestrator.py's issue mirror); any
+    failure (no slug, no network, malformed response) returns False —
+    "cannot verify" must never be treated as "verified"."""
+    slug = _repo_slug()
+    if not slug or "/" not in slug:
+        return False
+    owner = slug.split("/")[0]
+    r = subprocess.run(
+        ["curl", "-s", "-m", "20",
+         f"https://api.github.com/repos/{slug}/pulls?head={owner}:{branch}&state=closed"],
+        capture_output=True, text=True)
+    try:
+        prs = json.loads(r.stdout)
+        assert isinstance(prs, list)
+    except Exception:
+        return False
+    return any(pr.get("merged_at") for pr in prs)
+
+
 def _branch_merged_into_main(branch):
     """True only if `branch`'s tip commit is actually reachable from
     origin/main — i.e. a real merge happened, not just a closed PR or a
@@ -435,7 +469,10 @@ def _branch_merged_into_main(branch):
                             ref, "origin/main"], capture_output=True)
         if r.returncode == 0:
             return True
-    return False
+    # Ancestor check misses squash/rebase merges (branch tip commit is
+    # rewritten, never lands in main's history verbatim) — fall back to
+    # asking GitHub whether a PR from this branch was actually merged.
+    return _pr_merged_via_api(branch)
 
 
 def cmd_archive(args):

@@ -1,4 +1,4 @@
-# Multi-Agent Framework Specification v2.10
+# Multi-Agent Framework Specification v2.11
 
 Autonomous, parallel, cost-bounded optimization of a target GitHub repository by
 specialized AI personas, coordinated exclusively through file-based artifacts and
@@ -85,6 +85,18 @@ a lock-gated state register.
 | 30 | `hub.py archive` now refuses to archive a `pending_human_build` task unless its branch's tip commit is verified as an ancestor of `origin/main` (`_branch_merged_into_main`: fetches `origin main <branch>`, checks `merge-base --is-ancestor` against the local branch and `origin/<branch>`). Any ambiguity — branch already deleted, fetch failure, no product-repo — returns "not merged", never "assume merged". `--force` still bypasses for genuinely branchless/no-code tasks | Real incident during the first `single_session` run: the Documenter role called `archive` right after opening PRs, without confirming they were merged. Each PR's branch got deleted by archive's own cleanup step, which auto-closed the PR unmerged on GitHub — the register showed 3 tasks fully done while zero of their code had reached `main`. Recovered by hand via `git fetch origin pull/<n>/head`; this closes the hole mechanically so self-reported state can never again substitute for a verified merge |
 
 ## Changelog from v2.9 (v2.10)
+
+| # | Change | Rationale |
+|---|--------|-----------|
+| 31 | `--once`'s wait loop (`while running: time.sleep(5); reap(...)`) now also calls `_write_dashboard_state` unconditionally on every 5s tick, not only when `reap()` detects a finished run | `reap()` only rewrote the dashboard on completion, so a single long-lived spawn (any `--once` run, most visibly `single_session` since it is one process for the whole sweep) left `elapsed_s` frozen in the dashboard for the entire wait instead of ticking live. Continuous (non-`--once`) mode was unaffected — its outer loop already rewrites every `poll_seconds` regardless of completions |
+
+## Changelog from v2.10 (v2.11)
+
+| # | Change | Rationale |
+|---|--------|-----------|
+| 32 | `_branch_merged_into_main` (v2.9's archive-merge check) now also checks whether the branch tip's tree hash appears anywhere in `origin/main`'s commit history, in addition to the existing ancestor check | Real false-refusal found immediately after v2.9 shipped: GitHub's squash-merge (the `merge_method` used throughout this framework's own PR flow) creates a brand-new commit on `main` whose tree matches the branch tip but which is NOT a descendant of the branch's own commit — so `merge-base --is-ancestor` reports "not merged" for every squash-merged PR, including ones that genuinely landed. The tree-hash check catches exactly this case without weakening the "ambiguity → refuse" default from v2.9 |
+
+
 
 | # | Change | Rationale |
 |---|--------|-----------|

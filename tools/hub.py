@@ -421,19 +421,38 @@ def cmd_record_cost(args):
 
 
 def _branch_merged_into_main(branch):
-    """True only if `branch`'s tip commit is actually reachable from
-    origin/main — i.e. a real merge happened, not just a closed PR or a
-    self-reported state transition. Any ambiguity (branch gone, fetch
-    failure, detached ref) returns False: "cannot verify" must never be
-    treated as "verified"."""
+    """True only if `branch`'s content actually landed in origin/main — i.e.
+    a real merge happened, not just a closed PR or a self-reported state
+    transition. Any ambiguity (branch gone, fetch failure, detached ref)
+    returns False: "cannot verify" must never be treated as "verified".
+
+    Checks two ways, since GitHub's squash-merge (the merge_method used
+    throughout this framework's own PR flow) creates a brand-new commit on
+    main whose tree matches the branch tip but which does NOT have the
+    branch's commit as an ancestor — a plain `merge-base --is-ancestor`
+    check misses every squash-merged PR (found via a real false-refusal on
+    an actually-merged task). So: (1) ancestor check, for regular
+    merges/fast-forwards; (2) tree-hash check against main's full history,
+    for squash merges."""
     if not branch or not os.path.isdir(PRODUCT):
         return False
     subprocess.run(["git", "-C", PRODUCT, "fetch", "origin", "main", branch],
                    capture_output=True)
-    for ref in (branch, f"origin/{branch}"):
+    refs = [branch, f"origin/{branch}"]
+    for ref in refs:
         r = subprocess.run(["git", "-C", PRODUCT, "merge-base", "--is-ancestor",
                             ref, "origin/main"], capture_output=True)
         if r.returncode == 0:
+            return True
+    for ref in refs:
+        tree = subprocess.run(["git", "-C", PRODUCT, "rev-parse", f"{ref}^{{tree}}"],
+                              capture_output=True, text=True)
+        if tree.returncode != 0:
+            continue
+        tree_hash = tree.stdout.strip()
+        log = subprocess.run(["git", "-C", PRODUCT, "log", "origin/main", "--format=%T"],
+                             capture_output=True, text=True)
+        if log.returncode == 0 and tree_hash in log.stdout.splitlines():
             return True
     return False
 

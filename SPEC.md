@@ -1,4 +1,4 @@
-# Multi-Agent Framework Specification v2.12
+# Multi-Agent Framework Specification v2.13
 
 Autonomous, parallel, cost-bounded optimization of a target GitHub repository by
 specialized AI personas, coordinated exclusively through file-based artifacts and
@@ -101,6 +101,12 @@ a lock-gated state register.
 | # | Change | Rationale |
 |---|--------|-----------|
 | 33 | New `execution_mode` value `hybrid`: Explorer / Architect Mode A (verdicts + task decomposition) / Developer / Documenter share one `single_session`-style process, but Architect Mode B (diff review) and QA ALWAYS spawn as separate fresh processes with their own models (`compute_hybrid_review_dispatch`, reusing `spawn()` exactly as `multi_process` does) | `single_session` amortizes spawn overhead well (SPEC §7.9, change 29) but has a structural self-review problem: the same context that authors a task's code can also be the one that approves it via Architect Mode B / QA, with only a prompt instruction ("QA review must still be genuine, not a rubber stamp") standing against confirmation bias — and the only archive-safety incident this framework has had (change 30) happened during a `single_session` run. `hybrid` keeps the session/cache savings for authorship-side roles while guaranteeing the reviewer is a fresh process that never saw the implementation happen |
+
+## Changelog from v2.12 (v2.13)
+
+| # | Change | Rationale |
+|---|--------|-----------|
+| 34 | All persona spawns (`spawn`, `spawn_single_session`, `spawn_hybrid_session`, `spawn_resume`) switched from `--output-format json` to `--output-format stream-json --verbose`, drained continuously by a per-run background thread (`_drain_stdout`) into `run.last_activity` (a one-line summary of the most recent tool call or assistant text) and `run.stdout_lines`; `reap()` now extracts the final `type: "result"` event from those lines (`_final_result_payload`) instead of calling `proc.communicate()`. `state.json` gained `personas[name].last_activity` and a top-level `active_session` (for `single_session`/`hybrid_session`, whose persona names never match a `persona_model_mapping` key) | Two independent problems with the old single-shot `json` format: (1) the dashboard showed only a frozen "running, Ns elapsed" for the whole duration of any spawn — no visibility into what it was actually doing; (2) more importantly, `json` only ever writes its one output line right before the child exits, so nothing was reading the pipe during execution — switching to `stream-json`, which writes incrementally throughout, would otherwise risk the child blocking once its combined output exceeds the OS pipe buffer, for every long-running spawn. The background reader thread fixes both: it's required for correctness (drains the pipe continuously) and, as a direct consequence, doubles as the live-activity feed. Verified end-to-end against a real spawn (not just `--dry-run`, which never touches this code path): `last_activity` updates live during execution, and final token/cost extraction from the last stream-json line matches what the old `json` format produced for the same run |
 
 | # | Change | Rationale |
 |---|--------|-----------|
@@ -462,7 +468,8 @@ Top-level keys of `state.json`:
 | Key | Description |
 |---|---|
 | `orchestrator` | `{pid, poll_seconds, heartbeat}` — heartbeat is ISO UTC, updated every poll |
-| `personas` | Object keyed by persona name: `{model, state, cost_label, elapsed_s, last_20_runs}` |
+| `personas` | Object keyed by persona name: `{model, state, cost_label, elapsed_s, last_activity, last_20_runs}`. `last_activity` is a one-line human-readable summary of the most recent stream-json event (tool call or assistant text) from that persona's currently-running process, or `null` when idle |
+| `active_session` | `{kind, model, cost_label, elapsed_s, last_activity}` for whichever `single_session`/`hybrid_session` run is currently active, or `null`. These two run kinds use persona names that never match a `persona_model_mapping` key, so they're surfaced here instead of in `personas` |
 | `tasks` | All task register entries |
 | `insights` | All insight register entries |
 | `budget` | `{today_tokens, limit, per_day, top_per_task}` (token counts only) |

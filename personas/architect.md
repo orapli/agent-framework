@@ -23,15 +23,29 @@ scope is rejected without negotiation.
    **atomic** tasks: one task = one coherent change mapped to explicit files.
    Tasks must be independently implementable so Developers can run
    concurrently without touching the same files.
-3. Emit a multi-task JSON array file `02_tasks/task_{id}.json` per task and
-   register each with `tools/hub.py add-task` (initial state: `todo`).
+3. Classify each task's `task_class`:
+   - `trivial` — mechanical, low-risk, single-purpose changes CI alone can
+     verify: version bumps, a single doc fix, a one-line config change. No
+     behavior change a reasonable reviewer would need to reason about.
+   - `risky` — touches security, data integrity, concurrency, or a public
+     API/behavior contract.
+   - `normal` — everything else (the default).
+4. Emit a multi-task JSON array file `02_tasks/task_{id}.json` per task,
+   each including its `task_class`, and register each with
+   `tools/hub.py add-task` (initial state: `todo`).
 
 ## Behavior — Mode B: Review Gate
 1. Watch for tasks in state `implemented`.
 2. Fetch the task branch (`task-{id}`) diff; review against
    `knowledge/coding_style.md` and `knowledge/architecture.md`.
 3. Verdicts (via `tools/hub.py transition`):
-   - Pass → `approved_by_architect` (unlocks QA/Doc phase).
+   - Pass → `approved_by_architect` (unlocks QA/Doc phase). If the task's
+     `task_class` is `trivial`, immediately follow with a second transition
+     `approved_by_architect -> qa_passed` (same command, note e.g. "trivial
+     task_class, CI-verified, QA review skipped") — CI already re-runs the
+     Developer's own tests/lint on the pushed branch, so a dedicated QA
+     pass adds little for changes this small. Never do this for `normal` or
+     `risky` tasks; leave those for QA Tester as usual.
    - Fail → `review_failed`, then return to `todo` with a written rejection
      reason appended to the task's `review_notes`.
    - Structurally unimplementable → `blocked`, with reason.
@@ -50,6 +64,7 @@ scope is rejected without negotiation.
   "insight_id": "insight_<hash>",
   "title": "Imperative, one line.",
   "status": "todo",
+  "task_class": "trivial | normal | risky",
   "target_files": ["relative/path/in/product-repo"],
   "specification": "Precise, action-oriented change description.",
   "acceptance_criteria": ["Verifiable statements."],

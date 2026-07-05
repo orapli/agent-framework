@@ -346,10 +346,17 @@ def cmd_insight_verdict(args):
     return 0
 
 
+TASK_CLASSES = ("trivial", "normal", "risky")
+
+
 def cmd_add_task(args):
     with open(args.file) as f:
         task = json.load(f)
     tid = task["task_id"]
+    task_class = task.get("task_class", "normal")
+    if task_class not in TASK_CLASSES:
+        print(f"task_class must be one of {TASK_CLASSES}, got {task_class!r}", file=sys.stderr)
+        return 1
     with get_lock():
         data = load_status()
         if tid in data["tasks"]:
@@ -378,6 +385,7 @@ def cmd_add_task(args):
             "insight_id": iid,
             "title": task.get("title", ""),
             "target_files": task.get("target_files", []),
+            "task_class": task_class,
             "status": "todo",
             "assignee": None,
             "branch": None,
@@ -635,6 +643,7 @@ def cmd_archive(args):
         entry["archived_at"] = iso(now())
         raw = data["usage"]["per_task"].get(args.task, 0)
         entry["tokens"] = raw["tokens"] if isinstance(raw, dict) else raw
+        entry["usd"] = raw.get("usd", 0.0) if isinstance(raw, dict) else 0.0
         # Move reports into the archive
         moved = []
         arc_reports = os.path.join(archive_dir, "reports")

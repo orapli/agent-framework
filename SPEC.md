@@ -305,6 +305,29 @@ instead, with reason `retry-limit`. `blocked` tasks are surfaced to the human
 and periodically re-evaluated by the Architect; `retry-limit` blocks require an
 explicit human decision.
 
+### 4.1 Task classification and the lightweight lane
+
+Every task carries a `task_class` (`trivial | normal | risky`, default
+`normal`) set by the Architect at decomposition time (Mode A). It does not add
+new states or transitions — `hub.py`'s `TRANSITIONS` matrix has no concept of
+task_class — it only changes *who* triggers `approved_by_architect ->
+qa_passed` and why:
+
+- `normal`/`risky`: unchanged — QA Tester picks up the task and issues that
+  transition after a real review.
+- `trivial`: the Architect issues `approved_by_architect -> qa_passed` itself,
+  immediately after the Pass verdict, with a note recording that CI substitutes
+  for a dedicated QA pass. QA Tester skips tasks in this class entirely (and
+  self-heals one it finds stuck there, per `personas/qa_tester.md`).
+
+This exists because the full pipeline's fixed overhead (Architect Mode B spawn
++ QA spawn + Documenter) is a poor trade for mechanical, low-risk changes —
+version bumps, a single doc fix, a one-line config change — where CI (tests +
+lint on the pushed branch) already provides the verification a dedicated QA
+pass would add little to. Measured on aero-grep: a modest UI feature task cost
+~$3.7 through the full pipeline, while several trivial tasks driven the same
+way but without a separate QA spawn cost near zero beyond CI.
+
 ## 5. Insight Lifecycle
 
 States: `proposed → accepted | rejected | duplicate` (verdict by Architect only).
@@ -505,6 +528,21 @@ Uniform exit-code semantics:
   the plain single-label record when the run made no transitions at all.
 - `system_settings.daily_token_budget` (config) is a hard ceiling enforced by
   the orchestrator (§7.4). The budget comparison always uses **tokens** (not USD).
+- **Explorer circuit breaker and decay** (`explorer_breaker_tripped`,
+  `explorer_decay_wait_s`, `explorer_ready` in `orchestrator.py`): Explorer
+  only ever auto-spawns into a completely empty backlog (compute_dispatch's
+  fallback), gated by the last `explorer_breaker_window` verdicts recorded in
+  `01_insights/index.json`. Below `explorer_breaker_min_acceptance` the hard
+  breaker stops auto-spawning entirely. Above that floor but below
+  `explorer_decay_soft_acceptance`, a graduated cooldown (0 to
+  `explorer_decay_max_wait_s`, scaled linearly with how far the rate has
+  fallen) spaces out auto-spawns instead of running one every idle poll
+  cycle at full price — real dogfooding saw acceptance sit just above the
+  hard floor (30%) while a single auto-spawn still cost ~88K tokens for zero
+  accepted insights. All three dispatch paths (`multi_process`,
+  `single_session`, `hybrid`) call the single `explorer_ready(cfg)` gate, so
+  none of them can silently bypass either check (change 39 fixed exactly
+  this gap for the hard breaker alone).
 - **Known gap**: `record-cost`'s per-task split (above) updates
   `usage.per_task`/`usage.per_day`, which `top_per_task` and `budget` read
   directly -- those are accurate for all modes. `runs.jsonl` (below) still
@@ -594,6 +632,7 @@ Top-level keys of `state.json`:
 | `personas` | Object keyed by persona name: `{model, state, cost_label, elapsed_s, last_activity, last_20_runs}`. `last_activity` is a one-line human-readable summary of the most recent stream-json event (tool call or assistant text) from that persona's currently-running process, or `null` when idle |
 | `active_session` | `{kind, model, cost_label, elapsed_s, last_activity}` for whichever `single_session`/`hybrid_session` run is currently active, or `null`. These two run kinds use persona names that never match a `persona_model_mapping` key, so they're surfaced here instead of in `personas` |
 | `tasks` | All task register entries |
+| `completed` | The 20 most recently archived tasks (across all `agent-hub/archive/*.json`), most recent first: `{task_id, title, status, tokens, usd, archived_at}`. Active work disappears from `tasks` at archive time (§11); this is the only place the dashboard can show what the system has actually finished |
 | `timelines` | `{task_id: [log entries with that task_id, chronological]}`, one key per entry in `tasks`. Rendered by `dashboard/index.html` as a per-task Gantt-style bar (time spent in each status) |
 | `insights` | All insight register entries |
 | `budget` | `{today_tokens, limit, per_day, top_per_task}` (token counts only) |
@@ -619,6 +658,10 @@ Both files land under `agent-hub/` which is gitignored; they are never committed
     "issue_sync_minutes": 60,
     "max_concurrent_spawns": 2,
     "limit_cooldown_fallback_minutes": 30,
+    "explorer_breaker_window": 10,
+    "explorer_breaker_min_acceptance": 0.2,
+    "explorer_decay_soft_acceptance": 0.5,
+    "explorer_decay_max_wait_s": 900,
     "execution_mode": "multi_process",
     "single_session_model": "claude-sonnet-4-6"
   },

@@ -323,7 +323,7 @@ def build_single_session_prompt(data, cfg):
         lines.append(f"5. As Developer: implement todo tasks (claim one at a time via "
                      f"`hub.py claim-task --persona developer`): {', '.join(todo_tasks)}")
     if not any([proposed, implemented, approved, qa_passed, todo_tasks]):
-        if explorer_breaker_tripped(cfg):
+        if not explorer_ready(cfg):
             return None
         lines.append("Nothing is pending. As Explorer: explore ../product-repo for new "
                      "insights per your persona definition. Register at most 3, then stop.")
@@ -623,7 +623,7 @@ def build_hybrid_session_prompt(data, cfg):
         lines.append(f"3. As Developer: implement todo tasks (claim one at a time via "
                      f"`hub.py claim-task --persona developer`): {', '.join(todo_tasks)}")
     if not any([proposed, qa_passed, todo_tasks]):
-        if explorer_breaker_tripped(cfg):
+        if not explorer_ready(cfg):
             return None
         lines.append("Nothing pending for this session. As Explorer: explore "
                      "../product-repo for new insights per your persona definition. "
@@ -1136,17 +1136,32 @@ def _write_dashboard_state(data, running, cfg):
         n_implemented = sum(1 for t in tasks.values() if t.get("status") in implemented_statuses)
 
         n_merged = 0
+        completed = []
         archive_dir = os.path.join(HUB, "archive")
         try:
-            for fname in os.listdir(archive_dir):
+            for fname in sorted(os.listdir(archive_dir)):
                 if fname.endswith(".json") and fname != "reports":
                     arc = load_json(os.path.join(archive_dir, fname), {})
                     if isinstance(arc, dict):
                         n_merged += len(arc)
+                        for tid, entry in arc.items():
+                            completed.append({
+                                "task_id": tid,
+                                "title": entry.get("title", ""),
+                                "status": entry.get("status", ""),
+                                "tokens": entry.get("tokens", 0),
+                                "usd": entry.get("usd", 0.0),
+                                "archived_at": entry.get("archived_at", ""),
+                            })
         except FileNotFoundError:
             pass
         except Exception as e:
             log(f"dashboard: archive count failed: {e}")
+
+        # Most recent first; the dashboard only needs a bounded recent window,
+        # not the full archive (which only grows).
+        completed.sort(key=lambda c: c["archived_at"], reverse=True)
+        completed = completed[:20]
 
         cumulative_usd = round(sum(r.get("cost_usd", 0.0) for r in runs), 6)
         usd_per_merged = round(cumulative_usd / n_merged, 6) if n_merged > 0 else None
@@ -1167,6 +1182,7 @@ def _write_dashboard_state(data, running, cfg):
             "tasks": tasks,
             "timelines": timelines,
             "insights": insights,
+            "completed": completed,
             "budget": {
                 "today_tokens": today_tokens,
                 "limit": budget_limit,
@@ -1437,6 +1453,73 @@ def explorer_breaker_tripped(cfg):
     return False
 
 
+def explorer_decay_wait_s(cfg):
+    """Graduated cooldown between Explorer auto-spawns, scaled by recent
+    insight acceptance rate — a soft decay in front of the hard circuit
+    breaker (`explorer_breaker_tripped`). At or above
+    `explorer_decay_soft_acceptance` the wait is 0 (full speed); it grows
+    linearly as the rate falls toward `explorer_breaker_min_acceptance`,
+    where the hard breaker takes over and stops exploration outright.
+    Exists because on a mature, small product exploration's marginal value
+    was observed to fall well before the hard breaker's threshold (recent
+    aero-grep dogfooding: 30% acceptance, just above a 20% floor, with the
+    last run spending ~88K tokens for zero accepted insights) — the binary
+    breaker alone still pays full price on every cycle right up until it
+    trips. Returns 0 (no decay) whenever there isn't yet enough history to
+    judge, or if config values leave no gap to decay across."""
+    window = int(cfg["system_settings"].get("explorer_breaker_window", 10))
+    hard_floor = float(cfg["system_settings"].get("explorer_breaker_min_acceptance", 0.2))
+    soft_ceiling = float(cfg["system_settings"].get("explorer_decay_soft_acceptance", 0.5))
+    max_wait_s = int(cfg["system_settings"].get("explorer_decay_max_wait_s", 900))
+    if soft_ceiling <= hard_floor:
+        return 0
+    index = load_json(INSIGHT_INDEX, [])
+    if not isinstance(index, list) or len(index) < window:
+        return 0
+    recent = index[-window:]
+    rate = sum(1 for e in recent if e.get("verdict") == "accepted") / len(recent)
+    if rate >= soft_ceiling:
+        return 0
+    frac = min(1.0, (soft_ceiling - rate) / (soft_ceiling - hard_floor))
+    return round(frac * max_wait_s)
+
+
+def explorer_last_spawn_age_s(runs):
+    """Seconds since the most recent Explorer run started, or None if there
+    has never been one. Reuses `runs.jsonl` (already the source for pacing
+    decisions elsewhere) rather than adding new persistent state."""
+    for r in reversed(runs):
+        if r.get("persona") == "explorer":
+            started = r.get("started_at")
+            if started:
+                try:
+                    return time.time() - _iso_to_epoch(started)
+                except Exception:
+                    return None
+            return None
+    return None
+
+
+def explorer_ready(cfg):
+    """True when Explorer may auto-spawn into an empty backlog: the hard
+    circuit breaker is not tripped, AND the graduated decay cooldown has
+    elapsed since its last run. Centralizes both checks so all three
+    dispatch paths (multi_process, single_session, hybrid) apply them
+    identically — see change 39 for why that consistency mattered for the
+    hard breaker alone; the same gap would otherwise reopen for decay."""
+    if explorer_breaker_tripped(cfg):
+        return False
+    wait_s = explorer_decay_wait_s(cfg)
+    if wait_s <= 0:
+        return True
+    age_s = explorer_last_spawn_age_s(_read_runs())
+    if age_s is None or age_s >= wait_s:
+        return True
+    log(f"explorer decay: last run {age_s:.0f}s ago, cooling down for {wait_s}s "
+        f"(recent acceptance below soft ceiling) — not auto-spawning Explorer")
+    return False
+
+
 def compute_dispatch(data, running, cfg):
     """Decide which personas to spawn this poll. One architect / qa / documenter
     / explorer at a time; developers up to the configured process count."""
@@ -1501,7 +1584,7 @@ def compute_dispatch(data, running, cfg):
 
     if not todo and not running and not resume_holders and not proposed \
        and not todo_tasks and not implemented and not approved and not qa_passed \
-       and not explorer_breaker_tripped(cfg):
+       and explorer_ready(cfg):
         todo.append(("explorer",
                      "Explore ../product-repo for new insights per your persona definition. "
                      "Register at most 3 new insights this run, then stop.",

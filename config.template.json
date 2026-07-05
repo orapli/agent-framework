@@ -16,7 +16,7 @@
     "explorer_decay_max_wait_s": 900,
     "session_window_minutes": 300,
     "session_token_budget": null,
-    "execution_mode": "multi_process",
+    "execution_mode": "hybrid",
     "single_session_model": "claude-sonnet-4-6"
   },
   "persona_model_mapping": {

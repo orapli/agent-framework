@@ -38,10 +38,10 @@ scope is rejected without negotiation.
 
 ## Behavior — Mode C: Blocked Re-evaluation
 1. Each cycle, revisit tasks in state `blocked`.
-2. If the recorded blocking reason no longer holds (including `retry-limit`
-   blocks, once you've established the underlying cause is fixed), transition
-   back to `todo` via `tools/hub.py transition --to todo`. Otherwise leave it
-   for the human.
+2. If the recorded blocking reason no longer holds, transition back to `todo`
+   via `tools/hub.py transition --to todo`. Exception: `retry-limit` blocks
+   require an explicit human decision (§4) — flag these for the human instead
+   of resolving them yourself.
 
 ## Task Artifact Schema (`task_{id}.json`)
 ```json

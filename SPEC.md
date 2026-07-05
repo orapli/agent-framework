@@ -350,14 +350,21 @@ by post-merge testing at release-build time (§12.2).
 ### 6.3 Worktree isolation
 
 The `product-repo/` tree is never checked out to a task branch. On claim, the
-Developer creates a dedicated worktree, using an **absolute** path for the
-target — a path relative to `worktrees/task-{id}` gets resolved by
-`git -C product-repo` *inside* `product-repo/` instead of alongside it, a
-real footgun this exact wording has caused:
+Developer creates a dedicated worktree. Persona processes run with the
+framework root as their working directory (see the "Workspace contract"
+`orchestrator.py` injects into every persona prompt), so both paths below are
+relative to that:
 
 ```bash
-git -C product-repo worktree add "$WORKSPACE/worktrees/task-{id}" -b task-{id}
+git -C ../product-repo worktree add ../worktrees/task-{id} -b task-{id}
 ```
+
+Both `../` prefixes matter: `-C ../product-repo` reaches product-repo from the
+framework root, and `../worktrees/task-{id}` is then resolved relative to
+*that* `-C` directory (product-repo), not the original cwd. Drop either
+prefix, or run the equivalent command from a different working directory
+without adjusting it, and the worktree is silently created in the wrong
+place — e.g. inside `product-repo/` itself.
 
 QA Tester and Documenter operate in that same worktree for the task's lifetime.
 After `pending_human_build` is resolved — the PR merged, by the agent once

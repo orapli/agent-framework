@@ -1,8 +1,30 @@
-# Multi-Agent Framework Specification v2.22
+# Multi-Agent Framework Specification v2.24
 
 Autonomous, parallel, cost-bounded optimization of a target GitHub repository by
 specialized AI personas, coordinated exclusively through file-based artifacts and
 a lock-gated state register.
+
+## Changelog from v2.22 (v2.23)
+
+| # | Change | Rationale |
+|---|--------|-----------|
+| 45 | `personas/developer.md` never described creating a worktree at all ("in `product-repo/`, create `task-{id}`"); restored the exact worktree-add command `orchestrator.py`'s `WORKSPACE_CONTRACT` injects into every persona prompt, in both the persona and §6.3, with an explanation of why the `../` prefixes matter | Contradicted the absolute rule that `product-repo/` is never checked out to a task branch (§6.3); a wrong copy of this same command (missing the `../` prefix) actually created a worktree inside `product-repo/` during real operation this session |
+| 46 | `personas/documenter.md` instructed writing directly to `CHANGELOG.md` | Contradicted `changelog.d/task_{id}.md` fragments (§6.4, itself change 7 from v1!) — likely why no fragments were ever added after the initial commit |
+| 47 | `personas/explorer.md`'s dedup step described re-reading every `01_insights/*.json` file's content to compare `category`/`subject_paths` | Contradicted §5's directive to use the compact `01_insights/index.json` instead, which doesn't even store those fields — the check as written was never executable; since `insight_id` is content-addressed, a filename-existence check on the computed candidate id is correct and cheap, and covers every insight state (not just verdicted ones, unlike the index alone) |
+| 48 | `personas/architect.md` Mode A never issued the `proposed -> accepted/rejected/duplicate` insight verdict itself, only decomposition | Required as an Architect v2 delta (§14) but missing from the persona file |
+| 49 | `personas/architect.md` gained Mode C: periodic re-evaluation of `blocked` tasks (§4), explicitly excluding `retry-limit` blocks (human-only per §4) | §14 required this delta; the persona file had no `blocked`-handling behavior at all |
+| 50 | `personas/qa_tester.md`'s PASS verdict never transitioned the task to `qa_passed` itself | Left the pipeline stalled on a transition nothing would ever issue |
+| 51 | `personas/documenter.md`'s consumption state was still `approved_by_architect` + QA-report-file-existence (pre-`hub.py`-transition-matrix wording) | Fixed to the real state the task register actually uses, `qa_passed` |
+
+## Changelog from v2.23 (v2.24)
+
+| # | Change | Rationale |
+|---|--------|-----------|
+| 52 | Explorer graduated decay (`explorer_decay_wait_s`/`explorer_ready`, §9) in front of the existing hard circuit breaker, wired into all three dispatch paths via one `explorer_ready(cfg)` gate | The binary breaker alone still paid full price every idle cycle right up until it tripped; real dogfooding saw acceptance sit just above the hard floor (30%) while a single auto-spawn still cost ~88K tokens for zero accepted insights |
+| 53 | Task classification (`task_class`: `trivial`/`normal`/`risky`, set by the Architect at decomposition, §4.1) with a lightweight lane for `trivial` tasks: the Architect's own Pass verdict also issues `approved_by_architect -> qa_passed`, and QA Tester skips (and self-heals) `trivial` tasks | The full pipeline's fixed overhead (Architect Mode B + QA + Documenter) was a poor trade for mechanical, low-risk changes CI alone can verify; no new states/transitions, only who triggers the existing edge |
+| 54 | Dashboard: new `completed` key (§9) — the 20 most recently archived tasks, sourced from `agent-hub/archive/*.json`, rendered as a Completed panel; `hub.py archive` now also captures `usd` (previously only `tokens`) | Tasks vanish from the register entirely at archive time, so the dashboard could never show what the system had actually finished, undermining the orchestrator's own stated goal of a human-facing digest that needs no direct `status.json` reading (§7) |
+| 55 | Dashboard: insight rows show `severity` and a `verdict_reason` tooltip, fixed-column grid replacing `flex`/`space-between`, corrected the insight status color map (removed a nonexistent `done`, added the real `duplicate`), tooltips on kanban cards and Effectiveness metric labels, dropped the unreachable kanban `merged` column | Rejected/duplicate insights' `verdict_reason` — the framework's own negative-knowledge record (§5) — had no UI surface at all; rows visually drifted out of alignment; `merged` is not a real task status (`hub.py` never produces it) and always rendered an empty column |
+| 56 | SPEC.md housekeeping: §10's example config was missing `session_window_minutes`/`session_token_budget` (already in `config.template.json`) and the `explorer_breaker_*`/`explorer_decay_*` keys; §14 incorrectly listed cost-recording as an Explorer persona-file delta when §9 makes this entirely orchestrator-mechanical | Doc examples and the persona-delta checklist had drifted from what the code and other SPEC sections already said |
 
 ## Changelog from v1
 
@@ -662,6 +684,8 @@ Both files land under `agent-hub/` which is gitignored; they are never committed
     "explorer_breaker_min_acceptance": 0.2,
     "explorer_decay_soft_acceptance": 0.5,
     "explorer_decay_max_wait_s": 900,
+    "session_window_minutes": 300,
+    "session_token_budget": null,
     "execution_mode": "multi_process",
     "single_session_model": "claude-sonnet-4-6"
   },
@@ -776,7 +800,7 @@ Persona identity files under `personas/` remain the behavioral source of truth.
 v2 deltas they must incorporate:
 
 - **Explorer**: dedup via `01_insights/index.json` (§5); reads the issue
-  mirror as an additional observation input (§12.1); records cycle cost (§9).
+  mirror as an additional observation input (§12.1).
 - **Architect**: issue insight verdicts with reasons (§5); re-evaluate
   `blocked` tasks each cycle (§4); decompose only `accepted` insights.
 - **Developer**: work exclusively in `worktrees/task-{id}` (§6.3); respect

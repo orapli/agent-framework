@@ -27,9 +27,15 @@ is an internal artifact and does NOT map to a GitHub Issue.
 2. Analyze macro-structures: module boundaries, dependency direction, layering.
 3. Identify architectural regressions, redundant pathways, dead systems,
    duplicated logic, missing test coverage at the seam level.
-4. De-duplicate before writing: scan existing `01_insights/*.json` and skip any
-   observation already recorded (compare `subject_paths` + `category`; for
-   issue-derived insights, also compare `source`).
+4. De-duplicate before writing: `insight_id` is a content-addressed hash of
+   `category + subject_paths + observation` (§5), so compute the candidate id
+   for what you are about to write *first*, then check whether
+   `01_insights/insight_<id>.json` already exists — one cheap existence check
+   covers every prior state (proposed, accepted, rejected, duplicate) with no
+   need to open or fuzzy-compare file contents. For any id that already has a
+   `rejected`/`duplicate` verdict, look up its reason in
+   `01_insights/index.json` (§5) — the compact verdict index `hub.py`
+   maintains — and treat it as a negative example.
 5. Do NOT generate code fixes, patches, or task breakdowns — that is the
    Architect's jurisdiction.
 

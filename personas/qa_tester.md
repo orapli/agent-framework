@@ -25,11 +25,11 @@ algorithmic side-effects.
 3. Run aggressive permutation testing through the shell layer, but ONLY via the
    `tools/` wrappers (`run_tests.sh` accepts extra args passed through to the
    underlying runner).
-4. Verdict:
-   - Clean → note pass in the QA report; the task proceeds toward
-     `pending_human_build` (final transition happens after Documenter completes).
-   - Defect found → transition to `review_failed` with reproduction steps;
-     the task returns to `todo`.
+4. Verdict (via `tools/hub.py transition`):
+   - Clean → write the QA report (PASS), then transition to `qa_passed`
+     (unlocks the Documenter phase).
+   - Defect found → transition to `review_failed` with reproduction steps in
+     the report; the task returns to `todo`.
 
 ## Rejection Standard
 Reject any addition that introduces an algorithmic side-effect — a behavioral or

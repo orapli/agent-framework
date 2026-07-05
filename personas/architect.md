@@ -14,11 +14,15 @@ scope is rejected without negotiation.
   `status.json` via `python3 tools/hub.py` subcommands only.
 
 ## Behavior — Mode A: Deconstruction
-1. Pick an insight whose `status.json` entry is not yet consumed
-   (`insights[id].tasks_generated == false`).
-2. Decompose it into fine-grained **atomic** tasks: one task = one coherent change
-   mapped to explicit files. Tasks must be independently implementable so
-   Developers can run concurrently without touching the same files.
+1. Pick an insight in state `proposed`. Issue a verdict via
+   `tools/hub.py insight-verdict --insight <id> --to accepted|rejected|duplicate
+   --reason <text>` (§5). `rejected`/`duplicate` require a reason — Explorer
+   treats these as negative examples, so be specific.
+2. For each `accepted` insight not yet consumed
+   (`insights[id].tasks_generated == false`), decompose it into fine-grained
+   **atomic** tasks: one task = one coherent change mapped to explicit files.
+   Tasks must be independently implementable so Developers can run
+   concurrently without touching the same files.
 3. Emit a multi-task JSON array file `02_tasks/task_{id}.json` per task and
    register each with `tools/hub.py add-task` (initial state: `todo`).
 
@@ -31,6 +35,13 @@ scope is rejected without negotiation.
    - Fail → `review_failed`, then return to `todo` with a written rejection
      reason appended to the task's `review_notes`.
    - Structurally unimplementable → `blocked`, with reason.
+
+## Behavior — Mode C: Blocked Re-evaluation
+1. Each cycle, revisit tasks in state `blocked`.
+2. If the recorded blocking reason no longer holds, transition back to `todo`
+   via `tools/hub.py transition --to todo`. Exception: `retry-limit` blocks
+   require an explicit human decision (§4) — flag these for the human instead
+   of resolving them yourself.
 
 ## Task Artifact Schema (`task_{id}.json`)
 ```json

@@ -468,8 +468,8 @@ belong to `hub.py` and the personas.
 
 ### 7.9 Execution modes: `multi_process`, `single_session`, `hybrid`
 
-`system_settings.execution_mode` (`"multi_process"` default, or
-`"single_session"`/`"hybrid"`; overridable per-run with `--mode`) selects how
+`system_settings.execution_mode` (`"hybrid"` default, or
+`"multi_process"`/`"single_session"`; overridable per-run with `--mode`) selects how
 the orchestrator turns pending work into spawned processes:
 
 - **`multi_process`** (§7 as described above): one spawned process per
@@ -686,7 +686,7 @@ Both files land under `agent-hub/` which is gitignored; they are never committed
     "explorer_decay_max_wait_s": 900,
     "session_window_minutes": 300,
     "session_token_budget": null,
-    "execution_mode": "multi_process",
+    "execution_mode": "hybrid",
     "single_session_model": "claude-sonnet-4-6"
   },
   "persona_model_mapping": {

@@ -22,10 +22,11 @@ Note: temperature / max_tokens in config.json are advisory — the Claude Code
 CLI does not expose these parameters.
 
 Execution modes (system_settings.execution_mode, or --mode for one run):
-  multi_process   (default) one spawned process per persona-phase, each on
+  multi_process   one spawned process per persona-phase, each on
                   its own model from persona_model_mapping. Best throughput
                   and cost/quality matching (cheap model for cheap work),
                   but each spawn re-pays system-prompt load + cache creation.
+                  Pick this when budget is not the constraint.
   single_session  one spawned process covering the WHOLE pending pipeline
                   (verdicts, review, QA, docs, implementation) in a single
                   continuous run, on ONE fixed model
@@ -34,15 +35,17 @@ Execution modes (system_settings.execution_mode, or --mode for one run):
                   once per phase — the right choice when token/session
                   budget is the binding constraint rather than latency or
                   per-phase model specialization. See SPEC §7.9.
-  hybrid          single_session's cost profile for Explorer / Architect Mode
-                  A (verdicts + decomposition) / Developer / Documenter, but
-                  Architect Mode B (diff review) and QA ALWAYS spawn as
-                  separate fresh processes with their own models, same as
-                  multi_process — so the context that wrote a task's code
-                  never also reviews it. The middle ground when
-                  single_session's session/cache savings matter but its
-                  self-review risk (same context authors and approves its
-                  own work) does not sit well. See SPEC §7.9.
+  hybrid          (default) single_session's cost profile for Explorer /
+                  Architect Mode A (verdicts + decomposition) / Developer /
+                  Documenter, but Architect Mode B (diff review) and QA
+                  ALWAYS spawn as separate fresh processes with their own
+                  models, same as multi_process — so the context that wrote
+                  a task's code never also reviews it. Default because this
+                  is the common case on a subscription plan (session/token
+                  budget bound by a rolling window) where the self-review
+                  risk of pure single_session is not acceptable — this
+                  framework's only archive-safety incident happened during
+                  a single_session run (changelog entry 30). See SPEC §7.9.
 
 Usage:
   orchestrator.py                 # poll loop (Ctrl-C to stop)
@@ -1671,7 +1674,7 @@ def main():
     cfg = load_config()
     if args.selftest:
         return selftest(cfg)
-    mode = args.mode or cfg["system_settings"].get("execution_mode", "multi_process")
+    mode = args.mode or cfg["system_settings"].get("execution_mode", "hybrid")
     if args.model:
         cfg["persona_model_mapping"] = dict(cfg["persona_model_mapping"])
         cfg["system_settings"] = dict(cfg["system_settings"])
@@ -1679,6 +1682,10 @@ def main():
     if mode not in ("multi_process", "single_session", "hybrid"):
         sys.exit(f"invalid execution_mode '{mode}' in config.json "
                  f"(expected 'multi_process', 'single_session', or 'hybrid')")
+
+    mode_source = "--mode flag" if args.mode else "config.json execution_mode"
+    log(f"execution_mode: {mode} (from {mode_source}) — see SPEC.md §7.9 for the "
+        f"multi_process/single_session/hybrid trade-off")
 
     if shutil.which("claude") is None:
         sys.exit("claude CLI not found in PATH — the orchestrator needs it to spawn personas")

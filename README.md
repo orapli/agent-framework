@@ -24,15 +24,22 @@ polls the register, decides what work is pending, and spawns persona agents as h
 Claude Code processes (`claude -p`), one model per persona role
 (`config.json`'s `persona_model_mapping`).
 
-## Two execution modes
+## Three execution modes
 
-- **`multi_process`** (default): one spawned process per persona-phase, each on its own model
-  — best throughput and cost/quality matching.
+- **`multi_process`**: one spawned process per persona-phase, each on its own model
+  — best throughput and cost/quality matching. Pick this when budget is not the constraint.
 - **`single_session`**: one process walks the *entire* pending pipeline in one continuous run,
   on one fixed model, narrating which persona role it adopts per item. Pays the fixed
   per-spawn overhead once per sweep instead of once per phase — the right choice when
   session/token budget (e.g. a subscription plan's time-boxed window), not latency or
-  per-phase model specialization, is the binding constraint.
+  per-phase model specialization, is the binding constraint, *and* you accept the risk of
+  the same context both authoring and approving its own code.
+- **`hybrid`** (default): the same session/cache savings as `single_session` for
+  Explorer/Architect-decomposition/Developer/Documenter, but Architect's diff review and QA
+  always spawn as separate, freshly-started processes — so the code is never judged by the
+  process that wrote it. The recommended choice on a subscription plan.
+
+See `SPEC.md` §7.9 for the full trade-off.
 
 See SPEC §7.9 for the full comparison; select with `system_settings.execution_mode` in
 `config.json`, or override per-run with `orchestrator.py --mode`.

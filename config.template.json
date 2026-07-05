@@ -12,6 +12,8 @@
     "limit_cooldown_fallback_minutes": 30,
     "explorer_breaker_window": 10,
     "explorer_breaker_min_acceptance": 0.2,
+    "explorer_decay_soft_acceptance": 0.5,
+    "explorer_decay_max_wait_s": 900,
     "session_window_minutes": 300,
     "session_token_budget": null,
     "execution_mode": "multi_process",

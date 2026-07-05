@@ -69,6 +69,21 @@ PYEOF
   && fail "verdict rejected without --reason must exit non-zero"
 "${HUB[@]}" insight-verdict --insight insight_smoke001 --to accepted >/dev/null || fail "verdict"
 "${HUB[@]}" add-task --file "$SC/t.json" >/dev/null || fail "add-task"
+"${HUB[@]}" show --task task_001 | grep -q '"task_class": "normal"' \
+  || fail "task_class must default to normal when the task file omits it"
+cat > "$SC/t-trivial.json" <<'EOF'
+{"task_id":"task_777","insight_id":"insight_smoke001","title":"trivial smoke",
+ "target_files":["y"],"task_class":"trivial"}
+EOF
+"${HUB[@]}" add-task --file "$SC/t-trivial.json" >/dev/null || fail "add-task (trivial)"
+"${HUB[@]}" show --task task_777 | grep -q '"task_class": "trivial"' \
+  || fail "task_class must round-trip as given"
+cat > "$SC/t-badclass.json" <<'EOF'
+{"task_id":"task_778","insight_id":"insight_smoke001","title":"bad class",
+ "target_files":["z"],"task_class":"urgent"}
+EOF
+"${HUB[@]}" add-task --file "$SC/t-badclass.json" 2>/dev/null \
+  && fail "add-task must reject an unknown task_class"
 "${HUB[@]}" claim-task --persona developer | grep -q task_001 || fail "claim"
 "${HUB[@]}" renew-lease --task task_001 >/dev/null || fail "renew-lease"
 "${HUB[@]}" transition --task task_001 --to implemented >/dev/null || fail "->implemented"
@@ -286,6 +301,48 @@ assert o.explorer_breaker_tripped(cfg) is True, "10% acceptance must trip"
 with open(o.INSIGHT_INDEX, "w") as f:
     json.dump([{"verdict": "accepted"}] * 3, f)  # below window (10), not enough history yet
 assert o.explorer_breaker_tripped(cfg) is False, "under-window history must NOT trip"
+
+# graduated decay (explorer_decay_wait_s): soft ceiling 0.5, hard floor 0.2,
+# max wait 900s (defaults) -- bridges the gap between "full speed" and the
+# hard breaker above instead of jumping straight from one to the other.
+import time as _decay_time
+cfg3 = {"system_settings": {}}
+with open(o.INSIGHT_INDEX, "w") as f:
+    json.dump([{"verdict": "accepted"}] * 6 + [{"verdict": "rejected"}] * 4, f)  # 60%, above soft ceiling
+assert o.explorer_decay_wait_s(cfg3) == 0, "at/above soft ceiling must have zero decay wait"
+
+with open(o.INSIGHT_INDEX, "w") as f:
+    json.dump([{"verdict": "accepted"}] * 2 + [{"verdict": "rejected"}] * 8, f)  # 20% == hard floor
+assert o.explorer_decay_wait_s(cfg3) == 900, "at the hard floor, decay wait must saturate to max"
+
+with open(o.INSIGHT_INDEX, "w") as f:
+    json.dump([{"verdict": "accepted"}] * 3 + [{"verdict": "rejected"}] * 7, f)  # 30%
+wait_mid = o.explorer_decay_wait_s(cfg3)
+# frac = (0.5 - 0.3) / (0.5 - 0.2) = 2/3 -> 600s of a 900s max (30% sits
+# closer to the hard floor than the soft ceiling, so more than half the
+# max wait, not a straight midpoint)
+assert wait_mid == 600, f"30% acceptance should give frac=2/3 of the 900s max, got {wait_mid}"
+
+# explorer_ready composes the hard breaker with the decay cooldown, reading
+# the real last-spawn time from runs.jsonl (no new persistent state added).
+import os as _decay_os
+_decay_os.makedirs(o.DASHBOARD, exist_ok=True)
+with open(o.INSIGHT_INDEX, "w") as f:
+    json.dump([{"verdict": "accepted"}] * 3 + [{"verdict": "rejected"}] * 7, f)  # 30% -> wait_mid seconds
+with open(o.RUNS_JSONL, "w") as f:
+    just_now = _decay_time.strftime("%Y-%m-%dT%H:%M:%SZ", _decay_time.gmtime())
+    f.write(json.dumps({"persona": "explorer", "started_at": just_now}) + "\n")
+assert o.explorer_ready(cfg3) is False, "explorer that just ran, under the decay wait, must not be ready"
+
+with open(o.RUNS_JSONL, "w") as f:
+    old_epoch = _decay_time.time() - (wait_mid + 5)
+    old_ts = _decay_time.strftime("%Y-%m-%dT%H:%M:%SZ", _decay_time.gmtime(old_epoch))
+    f.write(json.dumps({"persona": "explorer", "started_at": old_ts}) + "\n")
+assert o.explorer_ready(cfg3) is True, "explorer run older than the decay wait must be ready again"
+
+with open(o.INSIGHT_INDEX, "w") as f:
+    json.dump([{"verdict": "rejected"}] * 9 + [{"verdict": "accepted"}], f)  # 10% -> hard breaker trips
+assert o.explorer_ready(cfg3) is False, "hard breaker must override decay/last-run-age entirely"
 
 # hybrid mode: Mode B review / QA must dispatch separately and never appear
 # in the hybrid session's own queue -- the whole point is the reviewer is

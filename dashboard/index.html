@@ -161,7 +161,7 @@ h2 {
 /* ── middle row ── */
 .mid-row {
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
   gap: 8px;
   margin-bottom: 16px;
 }
@@ -261,8 +261,8 @@ h2 {
 
 /* insight summary */
 .insight-item {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 90px 64px 48px 1fr 90px;
   align-items: center;
   gap: 6px;
   padding: 5px 0;
@@ -270,12 +270,44 @@ h2 {
   font-size: 11px;
 }
 .insight-item:last-child { border-bottom: none; }
-.insight-id { font-size: 10px; color: var(--accent); flex-shrink: 0; }
-.insight-meta { font-size: 10px; color: var(--muted); flex-shrink: 0; }
+.insight-id { font-size: 10px; color: var(--accent); }
+.insight-status { font-size: 10px; font-weight: 700; }
+.insight-severity { font-size: 10px; }
+.insight-meta {
+  font-size: 10px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .insight-source {
   font-size: 10px;
   color: var(--yellow);
-  flex-shrink: 0;
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* completed tasks */
+.completed-item {
+  display: grid;
+  grid-template-columns: 64px 1fr 64px;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--bg-surface0);
+  font-size: 11px;
+}
+.completed-item:last-child { border-bottom: none; }
+.completed-id { font-size: 10px; color: var(--accent); }
+.completed-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.completed-cost {
+  font-size: 10px;
+  color: var(--yellow);
+  text-align: right;
   white-space: nowrap;
 }
 
@@ -530,16 +562,25 @@ h2 {
     review_failed:          '#f38ba8',
     qa_passed:              '#a6e3a1',
     pending_human_build:    '#f9e2af',
-    merged:                 '#a6e3a1',
-    archived:               '#45475a',
     blocked:                '#f38ba8',
   };
 
+  // `merged` is not a real task status — tasks go pending_human_build ->
+  // archived (removed from the register, see `completed` instead), never
+  // through a `merged` state — so it is deliberately absent from both the
+  // kanban columns and this color map (it would only ever render empty).
   var KANBAN_COLS = [
     'todo', 'in_progress', 'implemented',
     'approved_by_architect', 'review_failed',
-    'qa_passed', 'pending_human_build', 'merged', 'blocked',
+    'qa_passed', 'pending_human_build', 'blocked',
   ];
+
+  var INSIGHT_STATUS_COLOR = {
+    proposed:  '#f9e2af',
+    accepted:  '#89b4fa',
+    rejected:  '#f38ba8',
+    duplicate: '#6c7086',
+  };
 
   /* ── helpers ── */
   function esc(s) {
@@ -618,6 +659,7 @@ h2 {
     var costs  = state.costs          || {};
     var eff    = state.effectiveness  || {};
     var log    = state.log_tail       || [];
+    var completed = state.completed   || [];
 
     /* staleness */
     var poll_s   = +(orch.poll_seconds || 60);
@@ -630,7 +672,7 @@ h2 {
       build_active_session(sess),
       build_personas(pers, costs),
       build_timeline(tasks, tl),
-      build_mid(tasks, ins, eff),
+      build_mid(tasks, ins, eff, completed),
       build_bot(budget, costs, log, pacing),
     ].join('');
   }
@@ -643,7 +685,7 @@ h2 {
     } else if (orch_ok) {
       badge = '<span class="badge badge-running">running</span>';
     } else {
-      badge = '<span class="badge badge-stopped">stopped 停止中</span>';
+      badge = '<span class="badge badge-stopped">stopped</span>';
     }
 
     return '<div class="header">' +
@@ -753,11 +795,12 @@ h2 {
     return '<div class="panel"><h2>Pipeline Timeline</h2><div class="timeline-list">' + rows + '</div></div>';
   }
 
-  function build_mid(tasks, insights, eff) {
+  function build_mid(tasks, insights, eff, completed) {
     return '<div class="mid-row">' +
       build_kanban(tasks) +
       build_insights(insights) +
       build_funnel(eff) +
+      build_completed(completed) +
       '</div>';
   }
 
@@ -768,7 +811,13 @@ h2 {
       var t = tasks[id];
       var s = t.status || 'todo';
       if (!by_status[s]) by_status[s] = [];
-      by_status[s].push({ id: id, title: t.title || '' });
+      by_status[s].push({
+        id: id,
+        title: t.title || '',
+        target_files: t.target_files || [],
+        attempts: t.attempts || 0,
+        task_class: t.task_class || '',
+      });
     });
 
     var cols = KANBAN_COLS.map(function (s) {
@@ -778,7 +827,11 @@ h2 {
       var cards = items.length
         ? items.map(function (t) {
             var short = t.title.length > 50 ? t.title.slice(0, 50) + '…' : t.title;
-            return '<div class="kanban-card">' +
+            var tip = t.title +
+              (t.task_class ? '\nclass: ' + t.task_class : '') +
+              (t.target_files.length ? '\nfiles: ' + t.target_files.join(', ') : '') +
+              (t.attempts ? '\nattempts: ' + t.attempts : '');
+            return '<div class="kanban-card" title="' + esc(tip) + '">' +
               '<div class="kanban-card-id">' + esc(t.id) + '</div>' +
               esc(short) +
               '</div>';
@@ -801,20 +854,20 @@ h2 {
     var rows = ids.length
       ? ids.map(function (id) {
           var ins = insights[id];
-          var status_color = {
-            proposed: C.yellow,
-            accepted:  C.accent,
-            rejected:  C.red,
-            done:      C.green,
-          }[ins.status] || C.muted;
+          var status_color = INSIGHT_STATUS_COLOR[ins.status] || C.muted;
           var source_badge = ins.source
             ? '<span class="insight-source" title="derived from a real GitHub issue">🔗 ' +
                 esc(ins.source) + '</span>'
-            : '';
-          return '<div class="insight-item">' +
+            : '<span class="insight-source"></span>';
+          // verdict_reason is the framework's negative-knowledge record for
+          // rejected/duplicate insights (SPEC §5) — surface it as a tooltip
+          // on the whole row since there's no room to show it inline.
+          var row_tip = ins.verdict_reason ? esc(ins.verdict_reason) : '';
+          return '<div class="insight-item" title="' + row_tip + '">' +
             '<span class="insight-id">' + esc(id.slice(0, 14)) + '</span>' +
-            '<span style="color:' + status_color + ';font-size:10px;font-weight:700">' +
+            '<span class="insight-status" style="color:' + status_color + '">' +
               esc(ins.status || '?') + '</span>' +
+            '<span class="insight-severity">' + esc(ins.severity || '') + '</span>' +
             '<span class="insight-meta">' + esc(ins.category || '') + '</span>' +
             source_badge +
             '</div>';
@@ -824,21 +877,39 @@ h2 {
     return '<div class="panel"><h2>Insights</h2>' + rows + '</div>';
   }
 
+  function build_completed(completed) {
+    var rows = completed.length
+      ? completed.map(function (c) {
+          var cost = c.usd ? fmt_usd(c.usd) : fmt_tokens(c.tokens) + ' tok';
+          var tip = (c.title || '') + '\nstatus: ' + (c.status || '') +
+            '\narchived: ' + (c.archived_at || '');
+          return '<div class="completed-item" title="' + esc(tip) + '">' +
+            '<span class="completed-id">' + esc(c.task_id) + '</span>' +
+            '<span class="completed-title">' + esc(c.title || '') + '</span>' +
+            '<span class="completed-cost">' + esc(cost) + '</span>' +
+            '</div>';
+        }).join('')
+      : '<div style="color:var(--muted);font-size:11px">No archived tasks yet</div>';
+
+    return '<div class="panel"><h2 title="Most recently archived tasks — the only place finished work is visible once it leaves the Tasks board">Completed</h2>' +
+      rows + '</div>';
+  }
+
   function build_funnel(eff) {
     var funnel = eff.funnel || {};
     var steps = [
-      { key: 'proposed',        label: 'Proposed' },
-      { key: 'accepted',        label: 'Accepted' },
-      { key: 'tasks_generated', label: 'Tasks' },
-      { key: 'implemented',     label: 'Implemented' },
-      { key: 'merged',          label: 'Merged' },
+      { key: 'proposed',        label: 'Proposed',   tip: 'Insights ever registered (any verdict)' },
+      { key: 'accepted',        label: 'Accepted',   tip: 'Insights the Architect accepted for decomposition' },
+      { key: 'tasks_generated', label: 'Tasks',      tip: 'Accepted insights that produced at least one task' },
+      { key: 'implemented',     label: 'Implemented', tip: 'Tasks that reached implemented or further (not yet necessarily merged)' },
+      { key: 'merged',          label: 'Merged',     tip: 'Tasks archived so far (this month + prior months)' },
     ];
     var max_v = Math.max(1, funnel.proposed || 0);
 
     var rows = steps.map(function (step) {
       var v = +(funnel[step.key] || 0);
       var pct = clamp(Math.round((v / max_v) * 100), 0, 100);
-      return '<div class="funnel-step">' +
+      return '<div class="funnel-step" title="' + esc(step.tip) + '">' +
         '<span class="funnel-label">' + esc(step.label) + '</span>' +
         '<div class="funnel-bar-wrap"><div class="funnel-bar" style="width:' + pct + '%"></div></div>' +
         '<span class="funnel-count">' + v + '</span>' +
@@ -852,9 +923,9 @@ h2 {
       : '—';
 
     var footer = '<div class="funnel-footer">' +
-      '<div>Cumulative: <span>' + fmt_usd(cum_usd) + '</span></div>' +
-      '<div>Per merged task: <span>' + per_merged + '</span></div>' +
-      '<div>Rework cost: <span>' + fmt_usd(eff.rework_usd) + '</span></div>' +
+      '<div title="Total USD across every persona/session run ever recorded">Cumulative: <span>' + fmt_usd(cum_usd) + '</span></div>' +
+      '<div title="Cumulative USD divided by tasks archived">Per merged task: <span>' + per_merged + '</span></div>' +
+      '<div title="Spend attributed to tasks that needed more than one attempt. Known gap (SPEC §9): single_session/hybrid_session runs are not fully attributed here, so this understates true rework cost">Rework cost: <span>' + fmt_usd(eff.rework_usd) + '</span></div>' +
       '</div>';
 
     return '<div class="panel"><h2>Effectiveness</h2>' + rows + footer + '</div>';

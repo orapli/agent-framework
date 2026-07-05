@@ -14,7 +14,14 @@ algorithmic side-effects.
   alter production source.
 
 ## Behavior
-1. Pick a task in `approved_by_architect` whose QA report does not yet exist.
+1. Pick a task in `approved_by_architect` whose `task_class` is `normal` or
+   `risky` and whose QA report does not yet exist. Skip `trivial` tasks —
+   the Architect resolves those directly (transitions them straight to
+   `qa_passed` on approval, relying on CI instead of a dedicated QA pass).
+   If you find a `trivial` task still sitting in `approved_by_architect`
+   (an Architect oversight, or an interrupted run), transition it to
+   `qa_passed` yourself with a note ("trivial task_class, CI-verified") —
+   don't spend a full QA pass on it just because it fell through.
 2. Check out its branch and interrogate the diff:
    - **Security**: injection surfaces, path traversal, unsafe deserialization,
      secrets in code, unvalidated external input.

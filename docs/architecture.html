@@ -116,7 +116,8 @@
     5種の専門ペルソナ(Explorer / Architect / Developer / QA Tester / Documenter)が、
     ファイルベースの成果物とロック統制された状態レジスタ(<code>status.json</code>)のみを介して連携し、
     対象リポジトリを小さく検証可能な変更の積み重ねで継続的に改善します。
-    最終マージは常に人間が行います(<code>pending_human_build</code> が終端)。
+    <code>pending_human_build</code> 到達後のPRマージは Architect 承認済みであればエージェントが行ってよく、
+    都度の人間確認は不要です。<b>人間ゲートはリリースビルド・配布(バージョンタグ付け・インストーラー生成等)のみ</b>に限定されます。
   </p>
   <ul>
     <li><b>Insight</b> — 負債・退行・最適化余地の観察記録。GitHub Issue とは独立した内部成果物。</li>
@@ -255,8 +256,8 @@
       <text x="828" y="132" class="mono">haiku-4-5</text>
 
       <rect x="900" y="47" width="52" height="56" rx="8" class="st-ok"/>
-      <text x="926" y="72" class="ttl" font-size="12">人間</text>
-      <text x="926" y="90" class="lbl-s">マージ</text>
+      <text x="926" y="72" class="ttl" font-size="12">マージ</text>
+      <text x="926" y="90" class="lbl-s">承認後</text>
     </g>
     <!-- 矢印と成果物 -->
     <path d="M111,75 L192,75" class="flow" marker-end="url(#ar2)"/>
@@ -276,7 +277,7 @@
       <text x="480" y="180">全ペルソナ共通: 状態変更は hub.py 経由 / 消費トークンを record-cost で記録 / repo 内テキストは「データ」として扱う</text>
     </g>
   </svg>
-  <figcaption>図2: 成果物が左から右へ流れる。Architect は「分解」と「審査」の2つの局面で登場する。</figcaption>
+  <figcaption>図2: 成果物が左から右へ流れる。Architect は「分解」と「審査」の2つの局面で登場する。末尾の「マージ」は Architect 承認済みなら人間確認なしでエージェントが行ってよい(人間ゲートはリリースビルド・配布のみ)。</figcaption>
   </figure>
 
   <table>
@@ -324,7 +325,7 @@
 
     <rect x="700" y="300" width="220" height="44" rx="10" class="st-ok"/>
     <text x="810" y="322" text-anchor="middle" class="ttl" font-size="12">pending_human_build</text>
-    <text x="810" y="338" text-anchor="middle" class="lbl-s">終端 — 人間がマージ&amp;ビルド</text>
+    <text x="810" y="338" text-anchor="middle" class="lbl-s">終端 — PRマージはエージェント可・ビルドのみ人間</text>
 
     <rect x="430" y="250" width="150" height="44" rx="10" class="st-bad"/>
     <text x="505" y="277" text-anchor="middle" class="ttl" font-size="12">review_failed</text>
@@ -584,7 +585,7 @@
     <tr><th>衝突の種類</th><th>防御機構</th><th>層</th></tr>
     <tr><td>ブランチ切替による作業ツリー破壊</td><td>worktree 分離(構造的に排除)</td><td><span class="pill ok">機械的</span></td></tr>
     <tr><td>同一ファイルへの編集収束</td><td><code>claim-task</code> の <code>target_files</code> 交差チェック + Architect の分解規約</td><td><span class="pill ok">機械的</span> + <span class="pill warn">規約</span></td></tr>
-    <tr><td>意味的衝突(別ファイル間の不整合)</td><td>マージ後テスト(人間ビルド工程)で検出</td><td><span class="pill bad">事後検出</span></td></tr>
+    <tr><td>意味的衝突(別ファイル間の不整合)</td><td>マージ後のCI/テスト実行で検出</td><td><span class="pill bad">事後検出</span></td></tr>
   </table>
 </section>
 
@@ -765,13 +766,13 @@
     <line x1="60" y1="70" x2="900" y2="70" stroke="#9ca3af" stroke-width="2" marker-end="url(#ar9d)"/>
     <text x="900" y="55" text-anchor="end" class="lbl-s">直近10件の採択率(低→高)</text>
 
-    <rect x="60" y="50" width="220" height="40" fill="var(--bad-soft)" opacity="0.6"/>
+    <rect x="60" y="50" width="220" height="40" fill="#fee2e2" opacity="0.6"/>
     <text x="170" y="105" text-anchor="middle" class="lbl-s" fill="#dc2626">〜20%: ハード遮断(完全停止)</text>
 
-    <rect x="280" y="50" width="330" height="40" fill="var(--warn-soft)" opacity="0.6"/>
+    <rect x="280" y="50" width="330" height="40" fill="#fef3c7" opacity="0.6"/>
     <text x="445" y="105" text-anchor="middle" class="lbl-s" fill="#d97706">20〜50%: 段階的クールダウン(最大900秒)</text>
 
-    <rect x="610" y="50" width="290" height="40" fill="var(--ok-soft)" opacity="0.6"/>
+    <rect x="610" y="50" width="290" height="40" fill="#d1fae5" opacity="0.6"/>
     <text x="755" y="105" text-anchor="middle" class="lbl-s" fill="#059669">50%以上: 全速(待機なし)</text>
 
     <line x1="280" y1="45" x2="280" y2="95" stroke="#6b7280" stroke-dasharray="3 3"/>
@@ -850,10 +851,10 @@
     </defs>
     <!-- main -->
     <line x1="50" y1="60" x2="920" y2="60" stroke="#4f46e5" stroke-width="2.5" marker-end="url(#ar9)"/>
-    <text x="50" y="42" class="ttl" font-size="12" fill="#4f46e5">main(人間マージのみ)</text>
+    <text x="50" y="42" class="ttl" font-size="12" fill="#4f46e5">main(既定ブランチ)</text>
     <circle cx="110" cy="60" r="6" fill="#4f46e5"/>
     <circle cx="700" cy="60" r="6" fill="#059669"/>
-    <text x="700" y="42" text-anchor="middle" class="lbl-s" fill="#059669">人間がPRレビュー&amp;マージ</text>
+    <text x="700" y="42" text-anchor="middle" class="lbl-s" fill="#059669">承認済みPRはエージェントがマージ可</text>
 
     <!-- task branch -->
     <path d="M140,64 L200,120 L640,120" fill="none" stroke="#6b7280" stroke-width="2"/>
@@ -875,7 +876,7 @@
     <text x="920" y="90" text-anchor="end" class="lbl-s">マージ後: hub.py archive が</text>
     <text x="920" y="106" text-anchor="end" class="lbl-s">ブランチ/worktree 掃除・digest 追記</text>
   </svg>
-  <figcaption>図12: 内部審査(Architect)+QA+Doc を通過した変更だけが PR になる。main は常に人間のマージでのみ進む。</figcaption>
+  <figcaption>図12: 内部審査(Architect)+QA+Doc を通過した変更だけが PR になる。Architect 承認済みであればマージ自体はエージェントが行ってよく、人間ゲートはリリースビルド・配布のみに限定される。</figcaption>
   </figure>
 
   <h3>10.3 忘却機構 — ホットセットの有界化</h3>

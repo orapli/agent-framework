@@ -64,6 +64,23 @@ code { background: var(--code-bg); border-radius: 4px; padding: 1px 6px; font-fa
   .slide { page-break-after: always; min-height: 100vh; }
   .counter, .navhint { display: none; }
 }
+
+/* SVG共通 (architecture.html と同一) */
+.st        { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.st-bad    { fill: var(--bad-soft);    stroke: var(--bad);    stroke-width: 1.5; }
+.st-warn   { fill: var(--warn-soft);   stroke: var(--warn);   stroke-width: 1.5; }
+.st-ok     { fill: var(--ok-soft);     stroke: var(--ok);     stroke-width: 2; }
+.box       { fill: #fff; stroke: #9ca3af; stroke-width: 1.2; }
+.box-soft  { fill: #f9fafb; stroke: #d1d5db; stroke-width: 1; }
+.flow      { stroke: #4b5563; stroke-width: 1.6; fill: none; }
+.flow-bad  { stroke: var(--bad); stroke-width: 1.6; fill: none; }
+.flow-warn { stroke: var(--warn); stroke-width: 1.6; fill: none; }
+.flow-dash { stroke-dasharray: 5 4; }
+svg text   { font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; fill: var(--ink); }
+.lbl       { font-size: 11px; fill: #374151; }
+.lbl-s     { font-size: 10px; fill: var(--sub); }
+.ttl       { font-size: 13px; font-weight: 600; }
+.mono      { font-family: Consolas, monospace; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -220,8 +237,8 @@ code { background: var(--code-bg); border-radius: 4px; padding: 1px 6px; font-fa
       <text x="828" y="132" class="mono">haiku-4-5</text>
 
       <rect x="900" y="47" width="52" height="56" rx="8" class="st-ok"/>
-      <text x="926" y="72" class="ttl" font-size="12">人間</text>
-      <text x="926" y="90" class="lbl-s">マージ</text>
+      <text x="926" y="72" class="ttl" font-size="12">マージ</text>
+      <text x="926" y="90" class="lbl-s">承認後</text>
     </g>
     <!-- 矢印と成果物 -->
     <path d="M111,75 L192,75" class="flow" marker-end="url(#ar2)"/>
@@ -293,7 +310,7 @@ code { background: var(--code-bg); border-radius: 4px; padding: 1px 6px; font-fa
 
     <rect x="700" y="300" width="220" height="44" rx="10" class="st-ok"/>
     <text x="810" y="322" text-anchor="middle" class="ttl" font-size="12">pending_human_build</text>
-    <text x="810" y="338" text-anchor="middle" class="lbl-s">終端 — 人間がマージ&amp;ビルド</text>
+    <text x="810" y="338" text-anchor="middle" class="lbl-s">終端 — PRマージはエージェント可・ビルドのみ人間</text>
 
     <rect x="430" y="250" width="150" height="44" rx="10" class="st-bad"/>
     <text x="505" y="277" text-anchor="middle" class="ttl" font-size="12">review_failed</text>
@@ -530,7 +547,7 @@ code { background: var(--code-bg); border-radius: 4px; padding: 1px 6px; font-fa
     <tr><th>衝突の種類</th><th>防御機構</th><th>層</th></tr>
     <tr><td>ブランチ切替による作業ツリー破壊</td><td>worktree 分離(構造的に排除)</td><td><span class="pill ok">機械的</span></td></tr>
     <tr><td>同一ファイルへの編集収束</td><td><code>claim-task</code> の target_files 交差チェック</td><td><span class="pill ok">機械的</span> + <span class="pill warn">規約</span></td></tr>
-    <tr><td>意味的衝突(別ファイル間の不整合)</td><td>マージ後テスト(人間ビルド工程)で検出</td><td><span class="pill bad">事後検出</span></td></tr>
+    <tr><td>意味的衝突(別ファイル間の不整合)</td><td>マージ後のCI/テスト実行で検出</td><td><span class="pill bad">事後検出</span></td></tr>
   </table>
 </section>
 
@@ -676,13 +693,13 @@ code { background: var(--code-bg); border-radius: 4px; padding: 1px 6px; font-fa
     <line x1="60" y1="70" x2="900" y2="70" stroke="#9ca3af" stroke-width="2" marker-end="url(#ar9d)"/>
     <text x="900" y="55" text-anchor="end" class="lbl-s">直近10件の採択率(低→高)</text>
 
-    <rect x="60" y="50" width="220" height="40" fill="var(--bad-soft)" opacity="0.6"/>
+    <rect x="60" y="50" width="220" height="40" fill="#fee2e2" opacity="0.6"/>
     <text x="170" y="105" text-anchor="middle" class="lbl-s" fill="#dc2626">〜20%: ハード遮断(完全停止)</text>
 
-    <rect x="280" y="50" width="330" height="40" fill="var(--warn-soft)" opacity="0.6"/>
+    <rect x="280" y="50" width="330" height="40" fill="#fef3c7" opacity="0.6"/>
     <text x="445" y="105" text-anchor="middle" class="lbl-s" fill="#d97706">20〜50%: 段階的クールダウン(最大900秒)</text>
 
-    <rect x="610" y="50" width="290" height="40" fill="var(--ok-soft)" opacity="0.6"/>
+    <rect x="610" y="50" width="290" height="40" fill="#d1fae5" opacity="0.6"/>
     <text x="755" y="105" text-anchor="middle" class="lbl-s" fill="#059669">50%以上: 全速(待機なし)</text>
 
     <line x1="280" y1="45" x2="280" y2="95" stroke="#6b7280" stroke-dasharray="3 3"/>
@@ -757,10 +774,10 @@ code { background: var(--code-bg); border-radius: 4px; padding: 1px 6px; font-fa
     </defs>
     <!-- main -->
     <line x1="50" y1="60" x2="920" y2="60" stroke="#4f46e5" stroke-width="2.5" marker-end="url(#ar9)"/>
-    <text x="50" y="42" class="ttl" font-size="12" fill="#4f46e5">main(人間マージのみ)</text>
+    <text x="50" y="42" class="ttl" font-size="12" fill="#4f46e5">main(既定ブランチ)</text>
     <circle cx="110" cy="60" r="6" fill="#4f46e5"/>
     <circle cx="700" cy="60" r="6" fill="#059669"/>
-    <text x="700" y="42" text-anchor="middle" class="lbl-s" fill="#059669">人間がPRレビュー&amp;マージ</text>
+    <text x="700" y="42" text-anchor="middle" class="lbl-s" fill="#059669">承認済みPRはエージェントがマージ可</text>
 
     <!-- task branch -->
     <path d="M140,64 L200,120 L640,120" fill="none" stroke="#6b7280" stroke-width="2"/>
@@ -782,7 +799,7 @@ code { background: var(--code-bg); border-radius: 4px; padding: 1px 6px; font-fa
     <text x="920" y="90" text-anchor="end" class="lbl-s">マージ後: hub.py archive が</text>
     <text x="920" y="106" text-anchor="end" class="lbl-s">ブランチ/worktree 掃除・digest 追記</text>
   </svg></div>
-  <figcaption>内部審査(Architect)+QA+Docを通過した変更だけがPRになる。main は常に人間のマージでのみ進む。</figcaption>
+  <figcaption>内部審査(Architect)+QA+Docを通過した変更だけがPRになる。Architect承認済みならマージ自体はエージェントが行ってよく、人間ゲートはリリースビルド・配布のみ。</figcaption>
 </section>
 
 

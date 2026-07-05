@@ -3,133 +3,99 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Multi-Agent Framework v2.24 — アーキテクチャ概要</title>
+<title>Multi-Agent Framework v2.24 — スライド</title>
 <style>
-  :root {
-    --ink: #1f2937;
-    --sub: #6b7280;
-    --accent: #4f46e5;
-    --accent-soft: #eef2ff;
-    --ok: #059669;
-    --ok-soft: #d1fae5;
-    --warn: #d97706;
-    --warn-soft: #fef3c7;
-    --bad: #dc2626;
-    --bad-soft: #fee2e2;
-    --line: #e5e7eb;
-    --code-bg: #f3f4f6;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
-    color: var(--ink);
-    background: #fafafa;
-    line-height: 1.7;
-  }
-  header {
-    background: linear-gradient(135deg, #312e81, #4f46e5);
-    color: #fff;
-    padding: 40px 24px 32px;
-  }
-  header h1 { margin: 0 0 8px; font-size: 26px; }
-  header p { margin: 0; opacity: .85; font-size: 14px; }
-  main { max-width: 980px; margin: 0 auto; padding: 24px 16px 80px; }
-  section {
-    background: #fff;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 24px 28px;
-    margin-top: 24px;
-  }
-  h2 {
-    font-size: 19px;
-    margin: 0 0 12px;
-    padding-left: 12px;
-    border-left: 4px solid var(--accent);
-  }
-  h3 { font-size: 15px; margin: 20px 0 8px; color: var(--accent); }
-  p, li { font-size: 14px; }
-  figure { margin: 16px 0; text-align: center; }
-  figcaption { font-size: 12px; color: var(--sub); margin-top: 6px; }
-  svg { max-width: 100%; height: auto; }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    font-size: 13px;
-    margin: 12px 0;
-  }
-  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
-  th { background: var(--accent-soft); font-weight: 600; }
-  code {
-    background: var(--code-bg);
-    border-radius: 4px;
-    padding: 1px 5px;
-    font-family: "SFMono-Regular", Consolas, monospace;
-    font-size: 12px;
-  }
-  .pill {
-    display: inline-block; border-radius: 999px; padding: 1px 10px;
-    font-size: 11px; font-weight: 600;
-  }
-  .pill.ok  { background: var(--ok-soft);  color: var(--ok); }
-  .pill.bad { background: var(--bad-soft); color: var(--bad); }
-  .pill.warn{ background: var(--warn-soft);color: var(--warn); }
-  .note {
-    background: var(--warn-soft);
-    border-left: 4px solid var(--warn);
-    padding: 10px 14px; border-radius: 6px; font-size: 13px;
-  }
-  footer { text-align: center; color: var(--sub); font-size: 12px; padding: 24px; }
-
-  /* SVG共通 */
-  .st        { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
-  .st-bad    { fill: var(--bad-soft);    stroke: var(--bad);    stroke-width: 1.5; }
-  .st-warn   { fill: var(--warn-soft);   stroke: var(--warn);   stroke-width: 1.5; }
-  .st-ok     { fill: var(--ok-soft);     stroke: var(--ok);     stroke-width: 2; }
-  .box       { fill: #fff; stroke: #9ca3af; stroke-width: 1.2; }
-  .box-soft  { fill: #f9fafb; stroke: #d1d5db; stroke-width: 1; }
-  .flow      { stroke: #4b5563; stroke-width: 1.6; fill: none; }
-  .flow-bad  { stroke: var(--bad); stroke-width: 1.6; fill: none; }
-  .flow-warn { stroke: var(--warn); stroke-width: 1.6; fill: none; }
-  .flow-dash { stroke-dasharray: 5 4; }
-  text       { font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; fill: var(--ink); }
-  .lbl       { font-size: 11px; fill: #374151; }
-  .lbl-s     { font-size: 10px; fill: var(--sub); }
-  .ttl       { font-size: 13px; font-weight: 600; }
-  .mono      { font-family: Consolas, monospace; font-size: 11px; }
+:root {
+  --ink: #1f2937; --sub: #6b7280; --accent: #4f46e5; --accent-soft: #eef2ff;
+  --ok: #059669; --ok-soft: #d1fae5; --warn: #d97706; --warn-soft: #fef3c7;
+  --bad: #dc2626; --bad-soft: #fee2e2; --line: #e5e7eb; --code-bg: #f3f4f6;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
+  color: var(--ink); background: #f3f4f6; line-height: 1.6;
+  scroll-snap-type: y mandatory; overflow-y: scroll; height: 100vh;
+}
+.slide {
+  scroll-snap-align: start;
+  min-height: 100vh;
+  display: flex; flex-direction: column; justify-content: center;
+  padding: 48px 64px; position: relative;
+  background: #fff; border-bottom: 1px solid var(--line);
+}
+.slide.title {
+  background: linear-gradient(135deg, #312e81, #4f46e5); color: #fff;
+  align-items: center; text-align: center;
+}
+.slide.title h1 { font-size: 42px; margin: 0 0 16px; }
+.slide.title p { font-size: 16px; opacity: .85; margin: 4px 0; }
+.slide.title code { background: rgba(255,255,255,.15); padding: 2px 8px; border-radius: 4px; }
+.slide.closing { background: linear-gradient(135deg, #312e81, #4f46e5); color: #fff; align-items: center; text-align: center; }
+.slide.closing a { color: #c7d2fe; }
+.eyebrow { font-size: 13px; color: var(--accent); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 6px; }
+.slide h2 { font-size: 30px; margin: 0 0 20px; padding-left: 16px; border-left: 6px solid var(--accent); }
+.slide h3 { font-size: 18px; color: var(--accent); margin: 0 0 12px; }
+.slide p, .slide li { font-size: 16px; }
+.slide ul { padding-left: 24px; }
+.slide li { margin-bottom: 8px; }
+.diagram-wrap { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; margin-top: 8px; }
+.diagram-wrap svg { max-width: 100%; max-height: 62vh; width: auto; height: auto; }
+figcaption { font-size: 13px; color: var(--sub); text-align: center; margin-top: 10px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 8px 0; }
+th, td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+th { background: var(--accent-soft); font-weight: 600; }
+code { background: var(--code-bg); border-radius: 4px; padding: 1px 6px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 14px; }
+.pill { display: inline-block; border-radius: 999px; padding: 2px 12px; font-size: 12px; font-weight: 600; }
+.pill.ok  { background: var(--ok-soft);  color: var(--ok); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); }
+.pill.warn{ background: var(--warn-soft);color: var(--warn); }
+.note { background: var(--warn-soft); border-left: 4px solid var(--warn); padding: 12px 16px; border-radius: 6px; font-size: 14px; margin-top: 12px; }
+.counter {
+  position: fixed; bottom: 18px; right: 24px; font-size: 13px; color: var(--sub);
+  background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 4px 14px;
+  z-index: 10;
+}
+.navhint { position: fixed; bottom: 18px; left: 24px; font-size: 12px; color: var(--sub); z-index: 10; }
+.two-col { display: flex; gap: 32px; align-items: flex-start; }
+.two-col > div { flex: 1; }
+@media print {
+  body { overflow: visible; height: auto; }
+  .slide { page-break-after: always; min-height: 100vh; }
+  .counter, .navhint { display: none; }
+}
 </style>
 </head>
 <body>
 
-<header>
-  <h1>Multi-Agent Framework — アーキテクチャ概要 (v2.24)</h1>
-  <p>自律・並行・コスト有界なリポジトリ最適化フレームワーク ｜ 正本: <code style="background:rgba(255,255,255,.15)">agent-framework/SPEC.md</code> ｜ 2026-07-05</p>
-</header>
+<section class="slide title">
+  <h1>Multi-Agent Framework</h1>
+  <p style="font-size:20px">自律・並行・コスト有界なリポジトリ最適化フレームワーク</p>
+  <p>正本: <code>agent-framework/SPEC.md</code> ｜ v2.24 ｜ 2026-07-05</p>
+</section>
 
-<main>
 
-<!-- ============ 1. 概要 ============ -->
-<section>
-  <h2>1. システム概要</h2>
-  <p>
-    5種の専門ペルソナ(Explorer / Architect / Developer / QA Tester / Documenter)が、
-    ファイルベースの成果物とロック統制された状態レジスタ(<code>status.json</code>)のみを介して連携し、
-    対象リポジトリを小さく検証可能な変更の積み重ねで継続的に改善します。
-    最終マージは常に人間が行います(<code>pending_human_build</code> が終端)。
-  </p>
+<section class="slide">
+  <div class="eyebrow">1. Overview</div>
+  <h2>システム概要</h2>
   <ul>
-    <li><b>Insight</b> — 負債・退行・最適化余地の観察記録。GitHub Issue とは独立した内部成果物。</li>
-    <li><b>Task</b> — 採用された Insight から分解された、ファイル単位で範囲が確定した原子的実装単位。</li>
-    <li><b>3つの統制</b> — 状態は <code>hub.py</code> のみが書く / コードは worktree のみで書く / コマンドは <code>tools/</code> のみで実行する。</li>
+    <li>5種の専門ペルソナ(Explorer / Architect / Developer / QA Tester / Documenter)が、ファイルベースの成果物とロック統制された状態レジスタ(<code>status.json</code>)のみを介して連携</li>
+    <li>対象リポジトリを小さく検証可能な変更の積み重ねで継続的に改善</li>
+    <li>最終マージは<b>Architect承認済みPRなら自動化に委譲可能</b>。<b>リリースビルド・配布だけは常に人間ゲート</b></li>
+  </ul>
+  <h3>3つの内部統制</h3>
+  <ul>
+    <li><b>Insight</b> — 負債・退行・最適化余地の観察記録。GitHub Issue とは独立した内部成果物</li>
+    <li><b>Task</b> — 採用された Insight から分解された、ファイル単位で範囲が確定した原子的実装単位</li>
+    <li>状態は <code>hub.py</code> のみが書く / コードは worktree のみで書く / コマンドは <code>tools/</code> のみで実行</li>
   </ul>
 </section>
 
-<!-- ============ 2. ワークスペース構成 ============ -->
-<section>
-  <h2>2. ワークスペース構成</h2>
-  <figure>
-  <svg viewBox="0 0 960 400" role="img" aria-label="ワークスペース構成図">
+
+<section class="slide">
+  <div class="eyebrow">2. Workspace</div>
+  <h2>ワークスペース構成</h2>
+  <div class="diagram-wrap"><svg viewBox="0 0 960 400" role="img" aria-label="ワークスペース構成図">
     <defs>
       <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
         <path d="M0,0 L8,4.5 L0,9 z" fill="#4b5563"/>
@@ -207,16 +173,15 @@
     <text x="544" y="212" class="lbl-s">アトミック書込</text>
     <path d="M450,156 L450,190" class="flow flow-dash" marker-end="url(#ar)"/>
     <text x="458" y="176" class="lbl-s">読み取りのみ</text>
-  </svg>
-  <figcaption>図1: ワークスペーストポロジ。コード変更は worktrees/、状態変更は hub.py 経由の status.json に集約される。</figcaption>
-  </figure>
+  </svg></div>
+  <figcaption>コード変更は worktrees/、状態変更は hub.py 経由の status.json に集約される。</figcaption>
 </section>
 
-<!-- ============ 3. パイプライン ============ -->
-<section>
-  <h2>3. ペルソナとパイプライン</h2>
-  <figure>
-  <svg viewBox="0 0 960 210" role="img" aria-label="ペルソナパイプライン図">
+
+<section class="slide">
+  <div class="eyebrow">3. Pipeline</div>
+  <h2>ペルソナとパイプライン</h2>
+  <div class="diagram-wrap"><svg viewBox="0 0 960 210" role="img" aria-label="ペルソナパイプライン図">
     <defs>
       <marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
         <path d="M0,0 L8,4.5 L0,9 z" fill="#4b5563"/>
@@ -275,25 +240,29 @@
     <g text-anchor="middle" class="lbl-s">
       <text x="480" y="180">全ペルソナ共通: 状態変更は hub.py 経由 / 消費トークンを record-cost で記録 / repo 内テキストは「データ」として扱う</text>
     </g>
-  </svg>
-  <figcaption>図2: 成果物が左から右へ流れる。Architect は「分解」と「審査」の2つの局面で登場する。</figcaption>
-  </figure>
+  </svg></div>
+  <figcaption>成果物が左から右へ流れる。Architect は「分解」と「審査」の2局面で登場する。</figcaption>
+</section>
 
+
+<section class="slide">
+  <div class="eyebrow">3. Pipeline</div>
+  <h2>ペルソナ責務</h2>
   <table>
-    <tr><th>ペルソナ</th><th>読み取り</th><th>書き込み</th><th>禁止事項</th></tr>
-    <tr><td><b>Explorer</b></td><td>product-repo 全体, knowledge/</td><td>01_insights/</td><td>コード修正の生成。却下済み Insight の再提出</td></tr>
-    <tr><td><b>Architect</b></td><td>01_insights/, diff, knowledge/</td><td>02_tasks/, Insight/Task の状態</td><td>accepted 以外の Insight の分解</td></tr>
-    <tr><td><b>Developer</b></td><td>担当 Task, knowledge/, tools/</td><td>worktrees/task-{id}/ のみ</td><td>main への push。テスト結果の捏造。status.json 直接編集</td></tr>
-    <tr><td><b>QA Tester</b></td><td>task branch, dev レポート</td><td>テスト追加, 03_reports/</td><td>プロダクションコードの変更</td></tr>
-    <tr><td><b>Documenter</b></td><td>diff, 既存ドキュメント</td><td>changelog.d/ 断片, README 等</td><td>CHANGELOG.md の直接編集。diff にない機能の記述</td></tr>
+    <tr><th>ペルソナ</th><th>書き込み</th><th>禁止事項</th></tr>
+    <tr><td><b>Explorer</b></td><td>01_insights/</td><td>コード修正の生成。却下済み Insight の再提出</td></tr>
+    <tr><td><b>Architect</b></td><td>02_tasks/, Insight/Task の状態</td><td>accepted 以外の Insight の分解</td></tr>
+    <tr><td><b>Developer</b></td><td>worktrees/task-{id}/ のみ</td><td>main への push。テスト結果の捏造</td></tr>
+    <tr><td><b>QA Tester</b></td><td>テスト追加, 03_reports/</td><td>プロダクションコードの変更</td></tr>
+    <tr><td><b>Documenter</b></td><td>changelog.d/ 断片, README 等</td><td>CHANGELOG.md の直接編集</td></tr>
   </table>
 </section>
 
-<!-- ============ 4. ステートマシン ============ -->
-<section>
-  <h2>4. タスク・ステートマシン</h2>
-  <figure>
-  <svg viewBox="0 0 960 440" role="img" aria-label="タスク状態遷移図">
+
+<section class="slide">
+  <div class="eyebrow">4. Task State Machine</div>
+  <h2>タスク状態遷移</h2>
+  <div class="diagram-wrap"><svg viewBox="0 0 960 440" role="img" aria-label="タスク状態遷移図">
     <defs>
       <marker id="ar3" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
         <path d="M0,0 L8,4.5 L0,9 z" fill="#4b5563"/>
@@ -384,31 +353,15 @@
       <rect x="262" y="0" width="14" height="14" rx="3" class="st-ok"/>
       <text x="282" y="12" class="lbl-s">終端</text>
     </g>
-  </svg>
-  <figcaption>図3: タスク状態遷移。表にない遷移は hub.py が exit 1 で拒否する。todo への復帰は毎回 attempts を加算し、3回で blocked に落ちる。</figcaption>
-  </figure>
+  </svg></div>
+  <figcaption>表にない遷移は hub.py が exit 1 で拒否する。3回失敗で blocked に落ちる。</figcaption>
+</section>
 
-  <table>
-    <tr><th>From</th><th>To</th><th>トリガー / 実行者</th></tr>
-    <tr><td><code>todo</code></td><td><code>in_progress</code></td><td>Developer の <code>claim-task</code>(リース発行 + ファイル排他)</td></tr>
-    <tr><td><code>todo</code></td><td><code>blocked</code></td><td>Architect: 構造的に実装不能(理由必須)</td></tr>
-    <tr><td><code>in_progress</code></td><td><code>implemented</code></td><td>Developer: テスト・リント exit 0、ブランチ push 済み</td></tr>
-    <tr><td><code>in_progress</code></td><td><code>todo</code></td><td>ローカル失敗、またはリース失効の自動回収(<code>attempts+1</code>)</td></tr>
-    <tr><td><code>implemented</code></td><td><code>approved_by_architect</code> / <code>review_failed</code></td><td>Architect 審査(不合格は理由必須)</td></tr>
-    <tr><td><code>approved_by_architect</code></td><td><code>qa_passed</code> / <code>review_failed</code></td><td>QA Tester の判定</td></tr>
-    <tr><td><code>qa_passed</code></td><td><code>pending_human_build</code></td><td>Documenter: 断片コミット & push 完了</td></tr>
-    <tr><td><code>review_failed</code></td><td><code>todo</code>(<code>attempts≥3</code> なら <code>blocked</code>)</td><td>自動</td></tr>
-    <tr><td><code>blocked</code></td><td><code>todo</code></td><td>Architect 再評価で阻害解消を確認、または人間(<code>retry-limit</code> 起因は人間のみ)</td></tr>
-  </table>
 
-  <h3>4.1 タスク分類と軽量レーン(v2.24)</h3>
-  <p>
-    Architect は分解時に各タスクへ <code>task_class</code>(<code>trivial</code> / <code>normal</code> / <code>risky</code>、既定 <code>normal</code>)を付与します。
-    新しい状態・遷移は増えません — 既存の <code>approved_by_architect → qa_passed</code> という同じ辺を、
-    <b>誰が引くか</b>だけが変わります。
-  </p>
-  <figure>
-  <svg viewBox="0 0 960 130" role="img" aria-label="軽量レーン図">
+<section class="slide">
+  <div class="eyebrow">4.1 Task Classification — v2.24</div>
+  <h2>タスク分類と軽量レーン</h2>
+  <div class="diagram-wrap"><svg viewBox="0 0 960 130" role="img" aria-label="軽量レーン図">
     <defs>
       <marker id="ar4b" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
         <path d="M0,0 L8,4.5 L0,9 z" fill="#4b5563"/>
@@ -434,21 +387,15 @@
     <text x="600" y="122" text-anchor="middle" class="lbl-s" fill="#059669">trivial → Architect が同じ判定内で即座に qa_passed へ</text>
     <rect x="680" y="88" width="200" height="40" rx="10" class="st-ok"/>
     <text x="780" y="112" text-anchor="middle" class="lbl">CIが代替 → qa_passed</text>
-  </svg>
-  <figcaption>図4: <code>trivial</code>(版数上げ・単一ドキュメント修正・1行設定変更など)は Architect の合格判定と同時に <code>qa_passed</code> まで進む。QA Tester は <code>trivial</code> を意図的にスキップし、取りこぼしを見つけたら自己修復する。</figcaption>
-  </figure>
-  <p class="note">
-    導入理由: 版数bumpのような機械的変更にもフルパイプライン(Architect審査 + QA + Documenter)の固定費がかかるのは割に合わない。
-    aero-grep での実測では、UI機能追加タスクがフルパイプラインで約$3.7かかった一方、
-    <code>trivial</code> 相当のタスクは QA スポーンを省略して CI のみで検証し、追加コストはほぼゼロだった。
-  </p>
+  </svg></div>
+  <p class="note">Architect が分解時に <code>task_class</code>(trivial / normal / risky)を付与。<code>trivial</code> は Architect の承認と同時に <code>qa_passed</code> まで進み、QAスポーンの固定費を省く。新しい状態・遷移は増えない — 既存の辺を「誰が引くか」だけが変わる。</p>
 </section>
 
-<!-- ============ 5. Insight ライフサイクル ============ -->
-<section>
-  <h2>5. Insight ライフサイクル</h2>
-  <figure>
-  <svg viewBox="0 0 720 190" role="img" aria-label="Insightライフサイクル図">
+
+<section class="slide">
+  <div class="eyebrow">5. Insight Lifecycle</div>
+  <h2>Insight ライフサイクル</h2>
+  <div class="diagram-wrap"><svg viewBox="0 0 720 190" role="img" aria-label="Insightライフサイクル図">
     <defs>
       <marker id="ar4" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
         <path d="M0,0 L8,4.5 L0,9 z" fill="#4b5563"/>
@@ -480,21 +427,15 @@
     <text x="580" y="100" class="lbl-s">rejected / duplicate は理由必須。</text>
     <text x="580" y="118" class="lbl-s">Explorer は却下理由を</text>
     <text x="580" y="136" class="lbl-s">負例として学習し再提出しない。</text>
-  </svg>
-  <figcaption>図5: Insight の4状態。ID は sha256(category + subject_paths + observation) の先頭8桁で、再実行しても同じ観察は同じ ID になる。</figcaption>
-  </figure>
+  </svg></div>
+  <figcaption>ID は sha256(category + subject_paths + observation) の先頭8桁。同じ観察は再実行しても同じ ID。</figcaption>
 </section>
 
-<!-- ============ 6. 並行性モデル ============ -->
-<section>
-  <h2>6. 並行性モデル(worktree 分離 + リース)</h2>
-  <h3>6.1 worktree 分離 — 「同居不可能」問題の解消</h3>
-  <p>
-    単一クローンでは <code>git checkout</code> が全員のファイルを切り替えてしまうため、並行 Developer は成立しません。
-    v2 では claim 時にタスク専用の worktree を切り出し、正本ツリーは常に既定ブランチに固定します。
-  </p>
-  <figure>
-  <svg viewBox="0 0 960 240" role="img" aria-label="worktree分離図">
+
+<section class="slide">
+  <div class="eyebrow">6.1 Concurrency</div>
+  <h2>worktree 分離</h2>
+  <div class="diagram-wrap"><svg viewBox="0 0 960 240" role="img" aria-label="worktree分離図">
     <defs>
       <marker id="ar5" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
         <path d="M0,0 L8,4.5 L0,9 z" fill="#4b5563"/>
@@ -530,13 +471,15 @@
     <path d="M270,120 L430,120" class="flow" marker-end="url(#ar5)"/>
     <path d="M270,150 L430,192" class="flow" marker-end="url(#ar5)"/>
     <text x="345" y="108" text-anchor="middle" class="lbl-s">worktree add</text>
-  </svg>
-  <figcaption>図6: 各タスクは独立したツリーとブランチを持ち、QA・Documenter も同じ worktree を引き継ぐ。マージ後に worktree remove。</figcaption>
-  </figure>
+  </svg></div>
+  <figcaption>各タスクは独立したツリーとブランチを持つ。マージ後に worktree remove。</figcaption>
+</section>
 
-  <h3>6.2 リースによる死亡エージェント回収</h3>
-  <figure>
-  <svg viewBox="0 0 960 220" role="img" aria-label="リースタイムライン図">
+
+<section class="slide">
+  <div class="eyebrow">6.2 Concurrency</div>
+  <h2>リースによる死亡エージェント回収</h2>
+  <div class="diagram-wrap"><svg viewBox="0 0 960 220" role="img" aria-label="リースタイムライン図">
     <defs>
       <marker id="ar6" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
         <path d="M0,0 L8,4.5 L0,9 z" fill="#4b5563"/>
@@ -575,24 +518,27 @@
     <path d="M470,140 L590,140" class="flow flow-warn flow-dash" marker-end="url(#ar6)"/>
     <rect x="596" y="122" width="310" height="30" rx="6" class="st-warn"/>
     <text x="751" y="142" text-anchor="middle" class="lbl-s">次の claim-task 実行時に自動で todo へ回収 (attempts+1)</text>
-  </svg>
-  <figcaption>図7: リース方式。回収は次の claim の副作用として実行されるため、専用の監視デーモンは不要。</figcaption>
-  </figure>
+  </svg></div>
+  <figcaption>回収は次の claim の副作用として実行されるため、専用の監視デーモンは不要。</figcaption>
+</section>
 
-  <h3>6.3 三層の衝突防御</h3>
+
+<section class="slide">
+  <div class="eyebrow">6.3 Concurrency</div>
+  <h2>三層の衝突防御</h2>
   <table>
     <tr><th>衝突の種類</th><th>防御機構</th><th>層</th></tr>
     <tr><td>ブランチ切替による作業ツリー破壊</td><td>worktree 分離(構造的に排除)</td><td><span class="pill ok">機械的</span></td></tr>
-    <tr><td>同一ファイルへの編集収束</td><td><code>claim-task</code> の <code>target_files</code> 交差チェック + Architect の分解規約</td><td><span class="pill ok">機械的</span> + <span class="pill warn">規約</span></td></tr>
+    <tr><td>同一ファイルへの編集収束</td><td><code>claim-task</code> の target_files 交差チェック</td><td><span class="pill ok">機械的</span> + <span class="pill warn">規約</span></td></tr>
     <tr><td>意味的衝突(別ファイル間の不整合)</td><td>マージ後テスト(人間ビルド工程)で検出</td><td><span class="pill bad">事後検出</span></td></tr>
   </table>
 </section>
 
-<!-- ============ 7. オーケストレータ ============ -->
-<section>
-  <h2>7. オーケストレータ(起動主体)</h2>
-  <figure>
-  <svg viewBox="0 0 960 320" role="img" aria-label="オーケストレータループ図">
+
+<section class="slide">
+  <div class="eyebrow">7. Orchestrator</div>
+  <h2>オーケストレータ・ポーリングループ</h2>
+  <div class="diagram-wrap"><svg viewBox="0 0 960 320" role="img" aria-label="オーケストレータループ図">
     <defs>
       <marker id="ar7" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
         <path d="M0,0 L8,4.5 L0,9 z" fill="#4f46e5"/>
@@ -632,23 +578,15 @@
     <text x="885" y="214" class="lbl-s" fill="#d97706">予算超過:</text>
     <text x="885" y="230" class="lbl-s" fill="#d97706">新規起動を停止</text>
     <text x="885" y="246" class="lbl-s" fill="#d97706">(実行中は完走)</text>
-  </svg>
-  <figcaption>図8: ポーリングループ。orchestrator は status.json を「読むだけ」で、状態変更は hub.py とペルソナに限定される。</figcaption>
-  </figure>
-  <p class="note">
-    <b>責務の分離:</b> リース/ロックは<b>状態</b>を守り、orchestrator は<b>プロセス数と予算</b>を守る。
-    回収処理(リース失効→todo)は hub.py の claim 副作用であり、orchestrator には回収ロジックを持たせない。
-  </p>
+  </svg></div>
+  <p class="note">責務の分離: リース/ロックは<b>状態</b>を守り、orchestrator は<b>プロセス数と予算</b>を守る。</p>
+</section>
 
-  <h3>7.1 実行モード — <code>multi_process</code> / <code>single_session</code> / <code>hybrid</code>(v2.24 既定)</h3>
-  <p>
-    ④「ペルソナをヘッドレス起動」の中身は <code>system_settings.execution_mode</code>(<code>--mode</code> で1回限りの上書き可)で3通りに分岐する。
-    サブスクリプションプラン(5時間ウィンドウ等でセッション/トークン予算が制約になりやすい)では
-    <b><code>hybrid</code> を既定</b>とする — 単なる節約策ではなく、このフレームワーク唯一のアーカイブ安全性インシデント
-    (change 30: <code>single_session</code> 実行中に自己レビューにより未マージPRを archive してしまった)を構造的に防ぐための選択でもある。
-  </p>
-  <figure>
-  <svg viewBox="0 0 960 260" role="img" aria-label="実行モード比較図">
+
+<section class="slide">
+  <div class="eyebrow">7.1 Execution Modes — v2.24 既定</div>
+  <h2>実行モード: multi_process / single_session / hybrid</h2>
+  <div class="diagram-wrap"><svg viewBox="0 0 960 260" role="img" aria-label="実行モード比較図">
     <defs>
       <marker id="ar7b" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
         <path d="M0,0 L8,4.5 L0,9 z" fill="#4b5563"/>
@@ -681,82 +619,55 @@
     <text x="650" y="208" class="lbl-s" fill="#059669">↑ 常に別プロセス・別モデルで独立起動</text>
     <path d="M410,220 L410,235 L20,235" class="flow flow-dash" marker-end="url(#ar7b)"/>
     <text x="215" y="250" text-anchor="middle" class="lbl-s">コードを書いた文脈は絶対にそれを承認しない</text>
-  </svg>
-  <figcaption>図9: <code>hybrid</code> は <code>single_session</code> のセッション/キャッシュ節約を執筆系ロールに残しつつ、審査系ロール(Architect Mode B・QA)だけは <code>multi_process</code> と同じく毎回新規プロセスで起動する。</figcaption>
-  </figure>
-  <table>
-    <tr><th>モード</th><th>プロセス構成</th><th>向くケース</th></tr>
-    <tr><td><code>multi_process</code></td><td>局面ごとに個別プロセス・個別モデル</td><td>予算が制約でない・スループット/モデル最適化重視</td></tr>
-    <tr><td><code>single_session</code></td><td>全ロールを1プロセス・1モデルで通し実行</td><td>セッション予算が制約かつ自己レビューリスクを許容できる場合</td></tr>
-    <tr><td><code>hybrid</code>(既定)</td><td>執筆系は1セッション、審査系(Architect審査・QA)は常に独立プロセス</td><td>セッション予算が制約 <b>かつ</b> 自己レビューリスクを許容できない場合(サブスク運用の既定)</td></tr>
-  </table>
+  </svg></div>
+  <p class="note"><b>hybrid が既定。</b>サブスク運用(セッション予算が制約)向けの節約効果を保ちつつ、唯一の実インシデント(change 30: single_session実行中の自己レビュー事故)を構造的に防ぐ。</p>
 </section>
 
-<!-- ============ 8. インターフェース契約 ============ -->
-<section>
-  <h2>8. インターフェース契約</h2>
-  <h3>8.1 hub.py — 唯一の状態ゲートウェイ</h3>
+
+<section class="slide">
+  <div class="eyebrow">8. Tool Contract</div>
+  <h2>hub.py — 唯一の状態ゲートウェイ</h2>
   <table>
     <tr><th>コマンド</th><th>効果</th></tr>
-    <tr><td><code>add-insight --file &lt;json&gt;</code></td><td>Insight を <code>proposed</code> で登録(ID 冪等)</td></tr>
-    <tr><td><code>insight-verdict --insight &lt;id&gt; --to accepted|rejected|duplicate</code></td><td>Architect 裁定。<code>rejected</code>/<code>duplicate</code> は <code>--reason</code> 必須</td></tr>
-    <tr><td><code>add-task --file &lt;json&gt;</code></td><td>Task を <code>todo</code> で登録</td></tr>
-    <tr><td><code>claim-task --persona &lt;name&gt;</code></td><td>アトミックなクレーム(リース発行・ファイル排他・期限切れ回収)。なければ exit 3</td></tr>
-    <tr><td><code>renew-lease --task &lt;id&gt;</code></td><td>リースを <code>lease_minutes</code> 分延長</td></tr>
-    <tr><td><code>transition --task &lt;id&gt; --to &lt;state&gt;</code></td><td>遷移マトリクス検証付きの状態遷移(表外は exit 1)</td></tr>
-    <tr><td><code>record-cost --task &lt;id&gt; --tokens &lt;n&gt;</code></td><td>トークン消費をタスク別・日別に累積</td></tr>
-    <tr><td><code>archive --task &lt;id&gt;</code></td><td>終端タスクを <code>archive/YYYY-MM.json</code> へ退避 + worktree 掃除</td></tr>
-    <tr><td><code>show [--task &lt;id&gt;]</code></td><td>読み取り専用ダンプ(読み取りはロック不要)</td></tr>
+    <tr><td><code>add-insight</code></td><td>Insight を proposed で登録(ID冪等)</td></tr>
+    <tr><td><code>insight-verdict</code></td><td>Architect裁定。rejected/duplicateは理由必須</td></tr>
+    <tr><td><code>claim-task</code></td><td>アトミックなクレーム。なければ exit 3</td></tr>
+    <tr><td><code>transition</code></td><td>遷移マトリクス検証付き状態遷移(表外は exit 1)</td></tr>
+    <tr><td><code>archive</code></td><td>終端タスクをarchive/へ退避 + worktree掃除</td></tr>
   </table>
-
-  <h3>8.2 tools/ — 終了コード契約</h3>
-  <table>
-    <tr><th>Exit</th><th>意味</th><th>エージェントの反応</th></tr>
-    <tr><td><span class="pill ok">0</span></td><td>検査合格</td><td>次工程へ進む</td></tr>
-    <tr><td><span class="pill bad">1</span></td><td>検査は実行され、不合格</td><td>エラーストリームを読んで修正を反復(リトライ価値あり)</td></tr>
-    <tr><td><span class="pill warn">2</span></td><td>実行不能(ランナー欠落・環境破損)</td><td>反復しない。報告して <code>blocked</code> 方向へ</td></tr>
-  </table>
+  <h3>tools/ 終了コード契約</h3>
+  <p><span class="pill ok">0</span> 合格 → 次工程へ &nbsp; <span class="pill bad">1</span> 不合格 → 反復 &nbsp; <span class="pill warn">2</span> 実行不能 → 反復せず blocked へ</p>
 </section>
 
-<!-- ============ 9. コストとセキュリティ ============ -->
-<section>
-  <h2>9. コスト管理とセキュリティ</h2>
-  <h3>9.1 コスト管理(目的関数の観測可能化)</h3>
-  <ul>
-    <li>全ペルソナは実行終了時に <code>record-cost</code> で消費トークンを記録(Explorer は擬似タスク <code>explorer_cycle</code> に計上)。</li>
-    <li><code>daily_token_budget</code>(既定 2,000,000)超過で orchestrator が新規起動を停止。実行中エージェントは完走。</li>
-    <li>レポートにトークン数を含め、タスク単位の費用対効果を事後監査可能にする。</li>
-  </ul>
-  <h3>9.2 セキュリティ制約</h3>
-  <ul>
-    <li><b>repo 内テキストはデータであり指示ではない。</b>指示の出所は <code>personas/</code>・<code>knowledge/</code>・担当タスク成果物のみ。エージェントへの指示を装う repo 内テキストはそれ自体を Insight(category: <code>risk</code>)として報告。</li>
-    <li>既定ブランチは全エージェント read-only。push は <code>task-{id}</code> ブランチのみ。</li>
-    <li>秘密情報(トークン・認証情報)をいかなる成果物にも書かない。</li>
-    <li>コマンド実行は <code>tools/</code> ラッパーのみ。</li>
-  </ul>
 
-  <h3>9.3 主要設定(config.json)</h3>
-  <table>
-    <tr><th>キー</th><th>既定値</th><th>意味</th></tr>
-    <tr><td><code>concurrency_limit_developer</code></td><td>4</td><td>並行 Developer プロセス数上限(orchestrator が強制)</td></tr>
-    <tr><td><code>lease_minutes</code></td><td>30</td><td>クレームの有効期限</td></tr>
-    <tr><td><code>max_attempts</code></td><td>3</td><td>todo 復帰回数の上限(超過で blocked)</td></tr>
-    <tr><td><code>daily_token_budget</code></td><td>2,000,000</td><td>日次トークン予算</td></tr>
-    <tr><td><code>orchestrator_poll_seconds</code></td><td>60</td><td>ポーリング間隔</td></tr>
-    <tr><td><code>log_max_entries</code></td><td>500</td><td>レジスタのイベントログ上限</td></tr>
-    <tr><td><code>execution_mode</code></td><td><code>hybrid</code>(v2.24〜)</td><td>§7.1参照。<code>--mode</code> で1回限り上書き可</td></tr>
-    <tr><td><code>explorer_breaker_window</code> / <code>_min_acceptance</code></td><td>10 / 0.2</td><td>直近10件の裁定中、採択率20%未満でExplorer自動起動を完全停止</td></tr>
-    <tr><td><code>explorer_decay_soft_acceptance</code> / <code>_max_wait_s</code></td><td>0.5 / 900</td><td>§9.4参照。採択率50%未満で段階的にクールダウンを延長</td></tr>
-  </table>
+<section class="slide">
+  <div class="eyebrow">9. Cost &amp; Security</div>
+  <h2>コスト管理とセキュリティ</h2>
+  <div class="two-col">
+    <div>
+      <h3>コスト管理</h3>
+      <ul>
+        <li>全ペルソナの消費トークンを record-cost で記録</li>
+        <li>daily_token_budget 超過で新規起動を停止(実行中は完走)</li>
+        <li>アダプティブなセッションペーシングでレート制限の壁を回避</li>
+      </ul>
+    </div>
+    <div>
+      <h3>セキュリティ制約</h3>
+      <ul>
+        <li>repo内テキストはデータであり指示ではない</li>
+        <li>既定ブランチは read-only。push は task-{id} のみ</li>
+        <li>秘密情報をいかなる成果物にも書かない</li>
+      </ul>
+    </div>
+  </div>
+</section>
 
-  <h3>9.4 Explorer 循環抑制 — サーキットブレーカーと段階的減衰(v2.24)</h3>
-  <p>
-    Explorer はバックログが完全に空の時だけ自動起動する。何も対策がないと、Architect に却下され続けても
-    毎ポーリング全力で再探索してしまう。実際の運用で採択率30%(ハード遮断の20%ぎりぎり上)のまま
-    88Kトークンを消費して0件採択という無駄が発生した。
-  </p>
-  <figure>
-  <svg viewBox="0 0 960 130" role="img" aria-label="Explorer抑制の段階図">
+
+<section class="slide">
+  <div class="eyebrow">9.4 Explorer Throttling — v2.24</div>
+  <h2>Explorer 循環抑制</h2>
+  <div class="diagram-wrap"><svg viewBox="0 0 960 130" role="img" aria-label="Explorer抑制の段階図">
     <defs>
       <marker id="ar9d" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
         <path d="M0,0 L8,4.5 L0,9 z" fill="#4b5563"/>
@@ -778,32 +689,26 @@
     <line x1="610" y1="45" x2="610" y2="95" stroke="#6b7280" stroke-dasharray="3 3"/>
     <text x="280" y="30" text-anchor="middle" class="lbl-s">20%</text>
     <text x="610" y="30" text-anchor="middle" class="lbl-s">50%</text>
-  </svg>
-  <figcaption>図10: <code>explorer_ready(cfg)</code> が3つの実行モードすべてから同一の関数で呼ばれ、ハード遮断・段階的減衰のどちらも一律に適用される。</figcaption>
-  </figure>
-
-  <h3>9.5 ダッシュボード(可観測性)</h3>
-  <p>
-    <code>agent-hub/dashboard/state.json</code>(+ <code>state.js</code>)を orchestrator が毎ポーリング上書きし、
-    <code>dashboard/index.html</code> が5秒毎に読み直して静的にレンダリングする(サーバ不要・<code>file://</code> で開ける)。
-    タスクはアーカイブ時にレジスタから削除されるため、<code>completed</code> キー(直近20件、<code>agent-hub/archive/*.json</code> 由来)
-    が「システムが実際に何を完了したか」を示す唯一の場所になる。
-  </p>
+  </svg></div>
+  <p class="note">実運用で採択率30%(遮断ラインの20%ぎりぎり上)のまま88Kトークンを消費し0件採択という無駄が発生 → 3実行モード共通の <code>explorer_ready()</code> ゲートで段階的減衰を導入。</p>
 </section>
 
-<!-- ============ 10. v2.1 追補 ============ -->
-<section>
-  <h2>10. v2.1 追補 — GitHub連携と忘却機構</h2>
-  <p>
-    ペルソナは現行5人を維持(issue取込は Explorer の入力拡張、人間向け報告は orchestrator が毎ポーリングで書き出す
-    <code>cycle-status.md</code> で吸収)。レイアウト追加は
-    <code>agent-hub/digest.md</code> / <code>agent-hub/cycle-status.md</code> /
-    <code>agent-hub/github-cache/</code> / <code>01_insights/index.json</code> の4点。
-  </p>
 
-  <h3>10.1 GitHub Issues のローカルミラー(read-only)</h3>
-  <figure>
-  <svg viewBox="0 0 960 150" role="img" aria-label="issueミラー同期図">
+<section class="slide">
+  <div class="eyebrow">9.5 Observability — v2.24</div>
+  <h2>ダッシュボード</h2>
+  <ul>
+    <li><code>agent-hub/dashboard/state.json</code> を orchestrator が毎ポーリング上書き、<code>dashboard/index.html</code> が5秒毎に再読込(サーバ不要)</li>
+    <li>タスクはアーカイブ時にレジスタから削除されるため、<code>completed</code> キー(直近20件)が「実際に完了した仕事」を示す唯一の場所</li>
+    <li>Insight行に severity・却下理由(verdict_reason)のツールチップ、kanbanカード・Effectiveness指標にもツールチップを追加</li>
+  </ul>
+</section>
+
+
+<section class="slide">
+  <div class="eyebrow">10.1 GitHub Integration</div>
+  <h2>GitHub Issues のローカルミラー</h2>
+  <div class="diagram-wrap"><svg viewBox="0 0 960 150" role="img" aria-label="issueミラー同期図">
     <defs>
       <marker id="ar8" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
         <path d="M0,0 L8,4.5 L0,9 z" fill="#4b5563"/>
@@ -833,13 +738,15 @@
     <rect x="800" y="45" width="140" height="56" rx="10" class="box"/>
     <text x="870" y="70" text-anchor="middle" class="ttl" font-size="12">Insight</text>
     <text x="870" y="88" text-anchor="middle" class="mono">source: github#123</text>
-  </svg>
-  <figcaption>図11: エージェントの issue 読取はミラーのみが正規経路。API 直叩きは禁止。書き戻し(コメント等)は将来拡張。</figcaption>
-  </figure>
+  </svg></div>
+  <figcaption>エージェントの issue 読取はミラーのみが正規経路。API 直叩きは禁止。</figcaption>
+</section>
 
-  <h3>10.2 ブランチ戦略 — 1タスク = 1ブランチ = 1PR</h3>
-  <figure>
-  <svg viewBox="0 0 960 225" role="img" aria-label="ブランチ戦略図">
+
+<section class="slide">
+  <div class="eyebrow">10.2 GitHub Integration</div>
+  <h2>ブランチ戦略 — 1タスク = 1ブランチ = 1PR</h2>
+  <div class="diagram-wrap"><svg viewBox="0 0 960 225" role="img" aria-label="ブランチ戦略図">
     <defs>
       <marker id="ar9" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
         <path d="M0,0 L8,4.5 L0,9 z" fill="#4f46e5"/>
@@ -874,43 +781,57 @@
 
     <text x="920" y="90" text-anchor="end" class="lbl-s">マージ後: hub.py archive が</text>
     <text x="920" y="106" text-anchor="end" class="lbl-s">ブランチ/worktree 掃除・digest 追記</text>
-  </svg>
-  <figcaption>図12: 内部審査(Architect)+QA+Doc を通過した変更だけが PR になる。main は常に人間のマージでのみ進む。</figcaption>
-  </figure>
+  </svg></div>
+  <figcaption>内部審査(Architect)+QA+Docを通過した変更だけがPRになる。main は常に人間のマージでのみ進む。</figcaption>
+</section>
 
-  <h3>10.3 忘却機構 — ホットセットの有界化</h3>
-  <p>
-    Claude のセッション memory はヘッドレス起動されるペルソナには持ち越されないため、
-    「記憶」も「忘却」もフレームワーク側のファイルとして実装します。
-    原則: <b>ホットセットは進行中のみ、履歴は1行要約 + アーカイブ実体</b>。
-  </p>
-  <table>
-    <tr><th>層</th><th>内容</th><th>生成コスト</th></tr>
-    <tr><td><code>digest.md</code></td><td>アーカイブ時に1行(id・タイトル・対象ファイル・結果・トークン)を hub.py が自動追記</td><td><span class="pill ok">ゼロ(シェル処理)</span></td></tr>
-    <tr><td><code>01_insights/index.json</code></td><td>Insight 裁定の1行索引(id・verdict・理由)。Explorer の重複チェックはこれだけ読む</td><td><span class="pill ok">ゼロ(シェル処理)</span></td></tr>
-    <tr><td><code>archive/YYYY-MM.json</code></td><td>レジスタ項目+レポート全文の退避先。特定の履歴詳細が必要な例外時のみ参照</td><td><span class="pill ok">ゼロ</span></td></tr>
-    <tr><td>ホットコンテキスト規則</td><td>ペルソナは digest / index / 進行中成果物だけを既定で読む(全文参照は例外)</td><td>—</td></tr>
-  </table>
-  <h3>10.4 マルチワークスペース運用(v2.2)</h3>
-  <p>
-    製品ごとに<b>独立したサンドボックス(sbx)</b>+フレームワーク一式を用意する
-    (例: <code>work/orapli/</code>=aero-grep用sbx、<code>work/git-dashboard/</code>=git-dashboard用sbx)。
-    レジスタ・ロック・リース・予算は一切共有せず、ファイルシステムも分断される。
-    デザインの統一感は「正本1つ+git配布」で担保する:
-  </p>
+
+<section class="slide">
+  <div class="eyebrow">10.3 / 10.4</div>
+  <h2>忘却機構とマルチワークスペース運用</h2>
   <ul>
-    <li>正本は専用privateリポジトリ <code>github.com/tas6/orapli-shared</code>(design-system.md / related-products.md)。各sbxの orchestrator が毎ポーリングで <code>shared-cache/</code> に git pull → <code>knowledge/</code> へコピー(いずれもシェル処理・トークンゼロ)。エージェントにとってローカルコピーは read-only で、規約変更の提案は Insight として人間に上げ、人間が正本リポジトリへ push する。</li>
-    <li><code>related-products.md</code>(人間が維持する関連プロダクト要約: 目的・リポジトリURL・デザイントーン・共有UI語彙)を全ペルソナが文脈として読む。</li>
-    <li>制約: クロスプロダクトの不整合は自動検出されない(人間起票、またはメモに基づく Explorer の観察でシステムに入る)。分離方式の受容済みトレードオフ。</li>
+    <li><b>忘却機構</b> — ホットセットは進行中のみ、履歴は digest.md の1行要約 + archive/ の実体。Claudeのセッションmemoryはヘッドレス起動に持ち越されないため、記憶も忘却もファイルとして実装</li>
+    <li><b>マルチワークスペース</b> — 製品ごとに独立したsbx+フレームワーク一式。レジスタ・ロック・リース・予算は一切共有しない</li>
+    <li>デザインの統一感は「正本1つ(<code>orapli-shared</code>)+ git配布」で担保。各sbxは read-only コピーを参照し、規約変更はInsight経由で人間に上げる</li>
   </ul>
 </section>
 
-</main>
 
-<footer>
-  Multi-Agent Framework Specification v2.24 ｜ 正本は <code>agent-framework/SPEC.md</code>(本HTMLは図解ダイジェスト) ｜ 更新日 2026-07-05
-  ｜ スライド版: <a href="architecture-slides.html" style="color:inherit">architecture-slides.html</a>
-</footer>
+<section class="slide closing">
+  <h1 style="font-size:32px">Multi-Agent Framework v2.24</h1>
+  <p>正本: <code>agent-framework/SPEC.md</code></p>
+  <p>図解版(スクロール1ページ): <a href="architecture.html">architecture.html</a></p>
+  <p style="margin-top:24px;font-size:13px;opacity:.7">2026-07-05</p>
+</section>
 
+<div class="counter" id="counter">1 / 1</div>
+<div class="navhint">← → または ↑ ↓ キーでスライド移動 ｜ 印刷でPDF書き出し可</div>
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var counter = document.getElementById('counter');
+  function current() {
+    var mid = window.scrollY + window.innerHeight / 2;
+    for (var i = 0; i < slides.length; i++) {
+      var r = slides[i];
+      if (r.offsetTop <= mid && r.offsetTop + r.offsetHeight > mid) return i;
+    }
+    return 0;
+  }
+  function update() { counter.textContent = (current() + 1) + ' / ' + slides.length; }
+  function go(i) {
+    i = Math.max(0, Math.min(slides.length - 1, i));
+    slides[i].scrollIntoView({ behavior: 'smooth' });
+  }
+  window.addEventListener('scroll', function () { requestAnimationFrame(update); }, { passive: true });
+  window.addEventListener('keydown', function (e) {
+    if (['ArrowRight', 'ArrowDown', 'PageDown', ' '].indexOf(e.key) !== -1) { e.preventDefault(); go(current() + 1); }
+    else if (['ArrowLeft', 'ArrowUp', 'PageUp'].indexOf(e.key) !== -1) { e.preventDefault(); go(current() - 1); }
+    else if (e.key === 'Home') { e.preventDefault(); go(0); }
+    else if (e.key === 'End') { e.preventDefault(); go(slides.length - 1); }
+  });
+  update();
+}());
+</script>
 </body>
 </html>
